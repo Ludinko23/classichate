@@ -13,6 +13,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: install_dependencies
+    - run: sudo apt install libx11-dev libxi-dev libgl1-mesa-dev
     - name: make
       run: make linux
     - name: make check
