@@ -61,6 +61,13 @@ To set enviroment variables
 export ANDROID_NDK_HOME=~/Android/ndk/android-ndk-r23
 export PATH=$ANDROID_NDK_HOME:$PATH
 ```
+
+The 3DS
+```
+make 3ds
+```
+You need the Devkit for the 3dS!
+
 *may not be 100% accurate :P*
 
 
