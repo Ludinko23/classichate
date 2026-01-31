@@ -18,21 +18,13 @@ sudo apt install build-essential libx11-dev libxi-dev libgl1-mesa-dev libopenal-
 
 How to build for Bindoj:
 ```
-make mingw CC=i686-w64-mingw32-gcc CXX=i686-w64-mingw32-g++
+make mingw
 ```
 You will need MinGw32
 ```
 sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686
 ```
 
-How to build for Bindoj 64 bit
-```
-make mingw CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
-```
-You will need MinGw64
-```
-sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-```
 How to build an APK installation file for Android:
 ```
 cd android
