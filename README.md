@@ -2,6 +2,7 @@
 ClassicHate is a Classic Minecraft-like custom client compatible with CSP and CPE. The code is from ClassiCube and will be changed and customized in the future.
 
 Idea by Ludinko23
+
 Main Programmer: https://github.com/dawidg81
 
 Cross-Compiling on Linux!
