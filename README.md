@@ -3,7 +3,7 @@ ClassicHate is a Classic Minecraft-like custom client compatible with CSP and CP
 
 Idea by Ludinko23
 
-Main Programmer: https://github.com/dawidg81
+Main Programmer: dawidg81
 
 Cross-Compiling on Linux!
 
@@ -16,9 +16,17 @@ Dependencies
 sudo apt install build-essential libx11-dev libxi-dev libgl1-mesa-dev libopenal-dev libcurl4-openssl-dev
 ```
 
-How to build for Bindoj:
+How to build for Bindoj x64:
 ```
-make mingw
+make mingw CC=x86_64-w64-mingw32-gcc
+```
+You will need MinGw32
+```
+sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686
+```
+How to build for Bindoj 32biz:
+```
+make mingw CC=i686-w64-mingw32-gcc
 ```
 You will need MinGw32
 ```
@@ -53,6 +61,6 @@ To set enviroment variables
 export ANDROID_NDK_HOME=~/Android/ndk/android-ndk-r23
 export PATH=$ANDROID_NDK_HOME:$PATH
 ```
-*may not be 100% accurate sorry guys.*
+*may not be 100% accurate :P*
 
 
