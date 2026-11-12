@@ -58,8 +58,9 @@ unzip commandlinetools-linux-9477386_latest.zip -d sdk/cmdline-tools/latest
 ```
 To set enviroment variables
 ```
-export ANDROID_NDK_HOME=~/Android/ndk/android-ndk-r23
-export PATH=$ANDROID_NDK_HOME:$PATH
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin"
 ```
 
 The 3DS
