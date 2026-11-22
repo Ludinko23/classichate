@@ -17,6 +17,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_VIEW_DISTANCE "viewdist"
 #define OPT_BLOCK_PHYSICS "singleplayerphysics"
 #define OPT_NAMES_MODE "namesmode"
+#define OPT_SHOW_OWN_NAMETAG "gfx-showownnametag"
 #define OPT_INVERT_MOUSE "invertmouse"
 #define OPT_SENSITIVITY "mousesensitivity"
 #define OPT_FPS_LIMIT "fpslimit"
@@ -27,6 +28,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_SMOOTH_LIGHTING "gfx-smoothlighting"
 #define OPT_LIGHTING_MODE "gfx-lightingmode"
 #define OPT_MIPMAPS "gfx-mipmaps"
+#define OPT_LEFT_HAND "gfx-lefthand"
 #define OPT_CHAT_LOGGING "chat-logging"
 #define OPT_WINDOW_WIDTH "window-width"
 #define OPT_WINDOW_HEIGHT "window-height"
@@ -81,14 +83,14 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_HTTP_ONLY "http-no-https"
 #define OPT_HTTPS_VERIFY "https-verify"
 #define OPT_SKIN_SERVER "http-skinserver"
+#define OPT_CAPE_TEXTURE "cape-texture"
 #define OPT_RAW_INPUT "win-raw-input"
 #define OPT_DPI_SCALING "win-dpi-scaling"
 #define OPT_GAME_VERSION "game-version"
 #define OPT_INV_SCROLLBAR_SCALE "inv-scrollbar-scale"
 #define OPT_ANAGLYPH3D "anaglyph-3d"
-
-#define Option_GetOffsetX(defValue) Options_GetInt("offset-x", 0, 1000, defValue);
-#define Option_GetOffsetY(defValue) Options_GetInt("offset-y", 0, 1000, defValue);
+#define OPT_TRANSPARENT_INVENTORY "transparent-inventory"
+#define OPT_RAINBOW_INVENTORY "rainbow-inventory"
 
 #define OPT_SELECTED_BLOCK_OUTLINE_COLOR "selected-block-outline-color"
 #define OPT_SELECTED_BLOCK_OUTLINE_OPACITY "selected-block-outline-opacity"

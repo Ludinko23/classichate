@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "LWidgets.h"
 #ifndef CC_DISABLE_LAUNCHER
 #include "String_.h"
@@ -152,7 +153,8 @@ void LButton_Add(void* screen, struct LButton* w, int width, int height, const c
 }
 
 void LButton_SetConst(struct LButton* w, const char* text) {
-	w->text = String_FromReadonly(text);
+	/* NOTE: the translation stays valid until the language changes, which rebuilds the screen */
+	w->text = String_FromReadonly(Lang_Get(text));
 	LBackend_ButtonUpdate(w);
 }
 
@@ -179,7 +181,7 @@ void LCheckbox_Add(void* screen, struct LCheckbox* w, const char* text,
 	w->autoSelectable = true;
 	w->ValueChanged   = onChanged;
 
-	w->text = String_FromReadonly(text);
+	w->text = String_FromReadonly(Lang_Get(text));
 	LBackend_CheckboxInit(w);
 	LScreen_AddWidget(screen, w);
 }
@@ -420,7 +422,11 @@ void LLabel_Add(void* screen, struct LLabel* w, const char* text,
 }
 
 void LLabel_SetText(struct LLabel* w, const cc_string* text) {
-	String_Copy(&w->text, text);
+	if (text != &w->text) {
+		/* every label is run through the translation table - no translation means shown as-is */
+		w->text.length = 0;
+		if (!Lang_Translate(text, &w->text)) String_Copy(&w->text, text);
+	}
 	LBackend_LabelUpdate(w);
 	LBackend_LayoutWidget((struct LWidget*)w);
 }

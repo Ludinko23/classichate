@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "Game.h"
 #include "Block.h"
 #include "World.h"
@@ -41,6 +42,9 @@
 #include "SystemFonts.h"
 #include "Formats.h"
 #include "EntityRenderers.h"
+#include <time.h>
+#include <stdio.h>
+#include <ctype.h>
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -72,6 +76,57 @@ cc_string Game_Mppass    = String_FromArray(mppassBuffer);
 #ifdef CC_BUILD_SPLITSCREEN
 int Game_NumStates = 1;
 #endif
+
+const char* Hate_SeasonName(void) {
+	time_t now = time(NULL);
+	struct tm* d = localtime(&now);
+	if (!d) return "Classic&cHATE";
+
+	if (d->tm_mon == 0  && d->tm_mday == 1)  return "New&cHATE";
+	if (d->tm_mon == 1  && d->tm_mday == 14) return "Classic&dLOVE";
+	if (d->tm_mon == 3  && d->tm_mday == 1)  return "Classic&dLOVE";
+	if (d->tm_mon == 9  && d->tm_mday == 31) return "Spooky&cHATE";
+	if (d->tm_mon == 11 && (d->tm_mday == 24 || d->tm_mday == 25 || d->tm_mday == 26)) return "&aChristmas&cHATE";
+	return "Classic&cHATE";
+}
+
+const char* Hate_AppTitle(void) {
+	static char buf[96];
+	const char* src = Hate_SeasonName();
+	char name[64];
+	int n = 0;
+
+	while (*src && n < 63) {
+		if (src[0] == '&' && isalnum((unsigned char)src[1])) {
+			src += 2;
+			continue;
+		}
+		name[n++] = *src++;
+	}
+	name[n] = '\0';
+
+	sprintf(buf, "%s %s%s", name, HATE_VER, HATE_SUFFIX);
+	return buf;
+}
+
+const char* Hate_AppName(void) {
+	static char buf[128];
+	const char* src = Hate_SeasonName();
+	int n = 0;
+
+	while (*src && n < 100) {
+		if (src[0] == '&' && isalnum((unsigned char)src[1])) {
+			buf[n++] = '%';
+			src++;
+			continue;
+		}
+		buf[n++] = *src++;
+	}
+	buf[n] = '\0';
+
+	sprintf(buf + n, "%%e %s%s", HATE_VER, HATE_SUFFIX);
+	return buf;
+}
 
 const char* const FpsLimit_Names[FPS_LIMIT_COUNT] = {
 	"Sync with monitor", "30FPS", "60FPS", "120FPS", "144FPS... Wow", "None... Wait what",
@@ -420,6 +475,7 @@ static void Game_Load(void) {
 	LoadOptions();
 	GameVersion_Load();
 	Utils_EnsureDirectory("maps");
+	Lang_Init();
 
 	Event_Register_(&WorldEvents.NewMap,           NULL, HandleOnNewMap);
 	Event_Register_(&WorldEvents.MapLoaded,        NULL, HandleOnNewMapLoaded);
@@ -849,6 +905,7 @@ void Game_Free(void) {
 	/* Set to false so components will always free managed textures too */
 	Gfx.ManagedTextures = false;
 	Event_UnregisterAll();
+	Lang_Free();
 	tasksCount = 0;
 
 	for (comp = comps_head; comp; comp = comp->next)

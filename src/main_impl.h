@@ -85,12 +85,7 @@ static void RunGame(void) {
 
 static void RunLauncher(void) {
 #ifndef CC_BUILD_WEB
-	Launcher_Setup();
-	/* NOTE: Make sure to keep delay same as hardcoded delay in Launcher_Tick */
-	while (Launcher_Tick()) { Thread_Sleep(10); }
-
-	Launcher_Finish();
-	Window_Destroy();
+	Launcher_Run();
 #endif
 }
 
@@ -135,7 +130,7 @@ static void SetupProgram(int argc, char** argv) {
 	Gamepads_Init();
 	
 	if (res) Logger_SysWarn(res, "setting current directory");
-	Platform_LogConst("Starting " GAME_APP_NAME " ..");
+	Platform_Log1("Starting %c ..", GAME_APP_NAME);
 	String_InitArray(Server.Address, ipBuffer);
 }
 

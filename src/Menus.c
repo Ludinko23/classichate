@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "Menus.h"
 #include "Widgets.h"
 #include "Game.h"
@@ -37,6 +38,15 @@
 #include "Lighting.h"
 #include "InputHandler.h"
 #include "Protocol.h"
+static int Menu_AppendUnicodeInput(struct InputWidget* input, cc_codepoint cp) {
+	char buffer[STRING_UNI_BYTES];
+	cc_string text;
+	String_InitArray(text, buffer);
+	if (!String_AppendCodepoint(&text, cp)) return false;
+	InputWidget_AppendText(input, &text);
+	return true;
+}
+
 
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
@@ -291,17 +301,17 @@ static STRING_REF cc_string ListScreen_UNSAFE_Get(struct ListScreen* s, int inde
 }
 
 static void ListScreen_UpdateTitle(struct ListScreen* s) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	int num, pages;
 	String_InitArray(str, strBuffer);
-	String_AppendConst(&str, s->titleText);
+	Lang_AppendTo(&str, s->titleText);
 
 	if (!Game_ClassicMode) {
 		num   = (s->currentIndex / LIST_SCREEN_ITEMS) + 1;
 		pages = Math_CeilDiv(s->entries.count, LIST_SCREEN_ITEMS);
 
 		if (pages == 0) pages = 1;
-		String_Format2(&str, " &7(page %i/%i)", &num, &pages);
+		String_Format2(&str, Lang_Get(" &7(page %i/%i)"), &num, &pages);
 	}
 	TextWidget_Set(&s->title, &str, &s->font);
 }
@@ -511,6 +521,7 @@ static void PauseScreenBase_AddWidgets(struct PauseScreen* s, int width) {
 
 /*########################################################################################################################*
 *-------------------------------------------------------PauseScreen-------------------------------------------------------*
+
 *#########################################################################################################################*/
 static struct Widget* pause_widgets[1 + 6 + 2];
 
@@ -528,7 +539,7 @@ static void PauseScreen_ContextRecreated(void* screen) {
 	struct FontDesc titleFont;
 	PauseScreenBase_ContextRecreated(s, &titleFont);
 
-	ButtonWidget_SetConst(&s->quit, "Are you sure to quit the party :-(", &titleFont);
+	ButtonWidget_SetConst(&s->quit, "Are you sure you want to leave the party :-(", &titleFont);
 	PauseScreen_CheckHacksAllowed(s);
 	Font_Free(&titleFont);
 }
@@ -544,12 +555,12 @@ static void PauseScreen_Layout(void* screen) {
 static void PauseScreen_Init(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
 	static const struct SimpleButtonDesc descs[] = {
-		{ -160,  -50, "Awesome settings",             Menu_SwitchOptions   },
+		{ -160,  -50, "Awesome settings",       Menu_SwitchOptions   },
 		{ -160,    0, "Change awesome imagery", Menu_SwitchTexPacks  },
-		{ -160,   50, "Keyboard setup",             Menu_SwitchHotkeys   },
-		{  160,  -50, "Generate new party",  Menu_SwitchGenLevel  },
-		{  160,    0, "Load party",          Menu_SwitchLoadLevel },
-		{  160,   50, "Save party",          Menu_SwitchSaveLevel }
+		{ -160,   50, "Keyboard setup",         Menu_SwitchHotkeys   },
+		{  160,  -50, "Generate new party",     Menu_SwitchGenLevel  },
+		{  160,    0, "Load party",             Menu_SwitchLoadLevel },
+		{  160,   50, "Save party",             Menu_SwitchSaveLevel }
 	};
 
 	s->widgets     = pause_widgets;
@@ -612,11 +623,11 @@ static void ClassicPauseScreen_Layout(void* screen) {
 static void ClassicPauseScreen_Init(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
 	static const struct SimpleButtonDesc descs[] = {
-		{    0, -100, "Awesome settings",             Menu_SwitchClassicOptions },
-		{    0,  -50, "Generate new party",  Menu_SwitchClassicGenLevel },
-		{    0,    0, "Save party",           Menu_SwitchSaveLevel },
-		{    0,   50, "Load party",           Menu_SwitchLoadLevel },
-		{    0,  100, "Change party appearance",   Menu_SwitchNostalgia }
+		{    0, -100, "Awesome settings",       Menu_SwitchClassicOptions },
+		{    0,  -50, "Generate new party",     Menu_SwitchClassicGenLevel },
+		{    0,    0, "Save party",             Menu_SwitchSaveLevel },
+		{    0,   50, "Load party",             Menu_SwitchLoadLevel },
+		{    0,  100, "Change party appearance", Menu_SwitchNostalgia }
 	};
 	s->widgets    = classicPause_widgets;
 	s->numWidgets = 0;
@@ -660,10 +671,9 @@ static struct OptionsGroupScreen {
 	struct FontDesc textFont;
 	struct ButtonWidget btns[8];
 	struct TextWidget desc;
-	struct ButtonWidget done;
+	struct ButtonWidget done, lang;
+	struct Widget* __widgets[8 + 3];
 } OptionsGroupScreen;
-
-static struct Widget* optGroups_widgets[8 + 2];
 
 static const char* const optsGroup_descs[8] = {
 	"&eMusic in my ears and dizzy steves",
@@ -697,6 +707,22 @@ CC_NOINLINE static void OptionsGroupScreen_UpdateDesc(struct OptionsGroupScreen*
 	TextWidget_SetConst(&s->desc, optsGroup_descs[s->selectedI], &s->textFont);
 }
 
+/* Shows the current language on the switcher button - NOT translated, so it's always readable */
+static void OptionsGroupScreen_UpdateLangButton(struct OptionsGroupScreen* s, struct FontDesc* font) {
+	cc_string str; char strBuffer[STRING_SIZE * 4];
+	String_InitArray(str, strBuffer);
+	Lang_AppendTo(&str, "Language");
+	String_AppendConst(&str, ": ");
+	Lang_AppendStored(&str, Lang_CurrentName());
+	ButtonWidget_Set(&s->lang, &str, font);
+}
+
+/* Cycles to the next language, then redraws everything with the new text */
+static void OptionsGroupScreen_SwitchLanguage(void* screen, void* widget) {
+	Lang_SetNext();
+	Gui_RefreshAll();
+}
+
 static void OptionsGroupScreen_ContextLost(void* screen) {
 	struct OptionsGroupScreen* s = (struct OptionsGroupScreen*)screen;
 	Font_Free(&s->textFont);
@@ -713,6 +739,7 @@ static void OptionsGroupScreen_ContextRecreated(void* screen) {
 
 	Menu_SetButtons(s->btns, &titleFont, optsGroup_btns, 8);
 	ButtonWidget_SetConst(&s->done, "I am done bro.", &titleFont);
+	OptionsGroupScreen_UpdateLangButton(s, &titleFont);
 
 	if (s->selectedI >= 0) OptionsGroupScreen_UpdateDesc(s);
 	OptionsGroupScreen_CheckHacksAllowed(s);
@@ -724,21 +751,23 @@ static void OptionsGroupScreen_Layout(void* screen) {
 	Menu_LayoutButtons(s->btns, optsGroup_btns, 8);
 	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
 	Menu_LayoutBack(&s->done);
+	Widget_SetLocation(&s->lang, ANCHOR_MAX, ANCHOR_MIN, 5, 5);
 }
 
 static void OptionsGroupScreen_Init(void* screen) {
 	struct OptionsGroupScreen* s = (struct OptionsGroupScreen*)screen;
 
 	Event_Register_(&UserEvents.HackPermsChanged, s, OptionsGroupScreen_CheckHacksAllowed);
-	s->widgets     = s->widgets;
+	s->widgets     = s->__widgets;
 	s->numWidgets  = 0;
-	s->maxWidgets  = Array_Elems(s->widgets);
+	s->maxWidgets  = Array_Elems(s->__widgets);
 	s->selectedI   = -1;
 	s->widgetsPerPage = 4;
 
 	Menu_AddButtons(s,  s->btns, 300, optsGroup_btns, 8);
 	TextWidget_Add(s,   &s->desc);
 	AddPrimaryButton(s, &s->done, Menu_SwitchPause);
+	ButtonWidget_Add(s, &s->lang, 200, OptionsGroupScreen_SwitchLanguage);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }
@@ -792,42 +821,42 @@ static struct EditHotkeyScreen {
 
 static void HotkeyListScreen_MakeFlags(int flags, cc_string* str);
 static void EditHotkeyScreen_MakeFlags(int flags, cc_string* str) {
-	if (flags == 0) String_AppendConst(str, " None");
+	if (flags == 0) Lang_AppendTo(str, " None");
 	HotkeyListScreen_MakeFlags(flags, str);
 }
 
 static void EditHotkeyScreen_UpdateBaseKey(struct EditHotkeyScreen* s) {
-	cc_string text; char textBuffer[STRING_SIZE];
+	cc_string text; char textBuffer[STRING_SIZE * 4];
 	String_InitArray(text, textBuffer);
 
 	if (s->selectedI == 0) {
-		String_AppendConst(&text, "Key: PRESS THAT KEY");
+		Lang_AppendTo(&text, "Key: PRESS THAT KEY");
 	} else {
-		String_AppendConst(&text, "Key: ");
+		Lang_AppendTo(&text, "Key: ");
 		String_AppendConst(&text, Input_DisplayNames[s->curHotkey.trigger]);
 	}
 	ButtonWidget_Set(&s->btns[0], &text, &s->titleFont);
 }
 
 static void EditHotkeyScreen_UpdateModifiers(struct EditHotkeyScreen* s) {
-	cc_string text; char textBuffer[STRING_SIZE];
+	cc_string text; char textBuffer[STRING_SIZE * 4];
 	String_InitArray(text, textBuffer);
 
 	if (s->selectedI == 1) {
-		String_AppendConst(&text, "Modifiers: CHOOSE WISELY");
+		Lang_AppendTo(&text, "Modifiers: CHOOSE WISELY");
 	} else {
-		String_AppendConst(&text, "Modifiers:");
+		Lang_AppendTo(&text, "Modifiers:");
 		EditHotkeyScreen_MakeFlags(s->curHotkey.mods, &text);
 	}
 	ButtonWidget_Set(&s->btns[1], &text, &s->titleFont);
 }
 
 static void EditHotkeyScreen_UpdateLeaveOpen(struct EditHotkeyScreen* s) {
-	cc_string text; char textBuffer[STRING_SIZE];
+	cc_string text; char textBuffer[STRING_SIZE * 4];
 	String_InitArray(text, textBuffer);
 
-	String_AppendConst(&text, "Input is alive: ");
-	String_AppendConst(&text, 
+	Lang_AppendTo(&text, "Input is alive: ");
+	Lang_AppendTo(&text, 
 		(s->curHotkey.flags & HOTKEY_FLAG_STAYS_OPEN) ? "yee" : "no");
 	ButtonWidget_Set(&s->btns[2], &text, &s->titleFont);
 }
@@ -909,6 +938,12 @@ static int EditHotkeyScreen_KeyPress(void* screen, char keyChar) {
 		InputWidget_Append(&s->input.base, keyChar);
 	}
 	return true;
+}
+
+static int EditHotkeyScreen_UnicodeKeyPress(void* screen, cc_codepoint cp) {
+	struct EditHotkeyScreen* s = (struct EditHotkeyScreen*)screen;
+	if (s->supressNextPress) { s->supressNextPress = false; return true; }
+	return Menu_AppendUnicodeInput(&s->input.base, cp);
 }
 
 static int EditHotkeyScreen_TextChanged(void* screen, const cc_string* str) {
@@ -1023,7 +1058,8 @@ static const struct ScreenVTABLE EditHotkeyScreen_VTABLE = {
 	EditHotkeyScreen_Render,  Screen_BuildMesh,
 	EditHotkeyScreen_KeyDown, Screen_InputUp,    EditHotkeyScreen_KeyPress, EditHotkeyScreen_TextChanged,
 	Menu_PointerDown,         Screen_PointerUp,  Menu_PointerMove,          Screen_TMouseScroll,
-	EditHotkeyScreen_Layout,  EditHotkeyScreen_ContextLost, EditHotkeyScreen_ContextRecreated
+	EditHotkeyScreen_Layout,  EditHotkeyScreen_ContextLost, EditHotkeyScreen_ContextRecreated,
+	NULL, EditHotkeyScreen_UnicodeKeyPress
 };
 void EditHotkeyScreen_Show(struct HotkeyData original) {
 	struct EditHotkeyScreen* s = &EditHotkeyScreen;
@@ -1441,7 +1477,7 @@ static void SaveLevelScreen_UploadCallback(const cc_string* path) {
 
 static void SaveLevelScreen_File(void* screen, void* b) {
 	static const char* const titles[] = {
-		"ClassiCube map", "Minecraft schematic", "Minecraft classic map", NULL
+		"ClassicHATE/ClassiCube map", "Minecraft schematic", "Minecraft classic map", NULL
 	};
 	static const char* const filters[] = {
 		".cw", ".schematic", ".mine", NULL
@@ -1468,6 +1504,12 @@ static int SaveLevelScreen_KeyPress(void* screen, char keyChar) {
 	SaveLevelScreen_RemoveOverwrites(s);
 	InputWidget_Append(&s->input.base, keyChar);
 	return true;
+}
+
+static int SaveLevelScreen_UnicodeKeyPress(void* screen, cc_codepoint cp) {
+	struct SaveLevelScreen* s = (struct SaveLevelScreen*)screen;
+	SaveLevelScreen_RemoveOverwrites(s);
+	return Menu_AppendUnicodeInput(&s->input.base, cp);
 }
 
 static int SaveLevelScreen_TextChanged(void* screen, const cc_string* str) {
@@ -1556,7 +1598,8 @@ static const struct ScreenVTABLE SaveLevelScreen_VTABLE = {
 	MenuScreen_Render2,      Screen_BuildMesh,
 	SaveLevelScreen_KeyDown, Screen_InputUp,   SaveLevelScreen_KeyPress, SaveLevelScreen_TextChanged,
 	Menu_PointerDown,        Screen_PointerUp, Menu_PointerMove,         Screen_TMouseScroll,
-	SaveLevelScreen_Layout,  SaveLevelScreen_ContextLost, SaveLevelScreen_ContextRecreated
+	SaveLevelScreen_Layout,  SaveLevelScreen_ContextLost, SaveLevelScreen_ContextRecreated,
+	NULL, SaveLevelScreen_UnicodeKeyPress
 };
 void SaveLevelScreen_Show(void) {
 	struct SaveLevelScreen* s = &SaveLevelScreen;
@@ -1756,9 +1799,9 @@ static void HotkeyListScreen_EntryClick(void* screen, void* widget) {
 }
 
 static void HotkeyListScreen_MakeFlags(int flags, cc_string* str) {
-	if (flags & HOTKEY_MOD_CTRL)  String_AppendConst(str, " Ctrl");
-	if (flags & HOTKEY_MOD_SHIFT) String_AppendConst(str, " Shift");
-	if (flags & HOTKEY_MOD_ALT)   String_AppendConst(str, " Alt");
+	if (flags & HOTKEY_MOD_CTRL)  Lang_AppendTo(str, " Ctrl");
+	if (flags & HOTKEY_MOD_SHIFT) Lang_AppendTo(str, " Shift");
+	if (flags & HOTKEY_MOD_ALT)   Lang_AppendTo(str, " Alt");
 }
 
 static void HotkeyListScreen_LoadEntries(struct ListScreen* s) {
@@ -1793,7 +1836,7 @@ static void HotkeyListScreen_ActionFunc(void* s, void* w) {
 void HotkeyListScreen_Show(void) {
 	struct ListScreen* s = &ListScreen;
 	s->titleText   = "Modify hotkeys";
-	s->actionText  = "New hotkey...";
+	s->actionText  = "New hotbutton";
 	
 	s->ActionClick = HotkeyListScreen_ActionFunc;
 	s->LoadEntries = HotkeyListScreen_LoadEntries;
@@ -1819,7 +1862,7 @@ static void LoadLevelScreen_EntryClick(void* screen, void* widget) {
 
 	/* FileNotFound error may be because user deleted maps from disc */
 	if (res != ReturnCode_FileNotFound) return;
-	Chat_AddRaw("&eReloading level list as it may be out of date");
+	Chat_AddRaw("&eReloading just in case ancient level files");
 	ListScreen_Reload(s);
 }
 
@@ -1843,6 +1886,7 @@ static void LoadLevelScreen_LoadEntries(struct ListScreen* s) {
 
 static void LoadLevelScreen_UploadCallback(const cc_string* path) { Map_LoadFrom(path); }
 static void LoadLevelScreen_ActionFunc(void* s, void* w) {
+
 	static const char* const filters[] = { 
 		".cw", ".dat", ".lvl", ".mine", ".fcm", ".mclevel", NULL 
 	}; /* TODO not hardcode list */
@@ -2267,7 +2311,7 @@ static struct MenuInputOverlay {
 	struct TextInputWidget input;
 	struct MenuInputDesc* desc;
 	MenuInputDone onDone;
-	cc_string value; char valueBuffer[STRING_SIZE];
+	cc_string value; char valueBuffer[STRING_SIZE * 4];
 	struct Widget* __widgets[2 + 1];
 } MenuInputOverlay;
 
@@ -2288,6 +2332,11 @@ static int MenuInputOverlay_KeyPress(void* screen, char keyChar) {
 	struct MenuInputOverlay* s = (struct MenuInputOverlay*)screen;
 	InputWidget_Append(&s->input.base, keyChar);
 	return true;
+}
+
+static int MenuInputOverlay_UnicodeKeyPress(void* screen, cc_codepoint cp) {
+	struct MenuInputOverlay* s = (struct MenuInputOverlay*)screen;
+	return Menu_AppendUnicodeInput(&s->input.base, cp);
 }
 
 static int MenuInputOverlay_TextChanged(void* screen, const cc_string* str) {
@@ -2323,7 +2372,7 @@ static void MenuInputOverlay_OK(void* screen, void* widget) {
 }
 
 static void MenuInputOverlay_Default(void* screen, void* widget) {
-	cc_string value; char valueBuffer[STRING_SIZE];
+	cc_string value; char valueBuffer[STRING_SIZE * 4];
 	struct MenuInputOverlay* s = (struct MenuInputOverlay*)screen;
 
 	String_InitArray(value, valueBuffer);
@@ -2408,7 +2457,8 @@ static const struct ScreenVTABLE MenuInputOverlay_VTABLE = {
 	MenuInputOverlay_Render,      Screen_BuildMesh,
 	MenuInputOverlay_KeyDown,     Screen_InputUp,   MenuInputOverlay_KeyPress,    MenuInputOverlay_TextChanged,
 	MenuInputOverlay_PointerDown, Screen_PointerUp, MenuInputOverlay_PointerMove, Screen_TMouseScroll,
-	MenuInputOverlay_Layout,      MenuInputOverlay_ContextLost, MenuInputOverlay_ContextRecreated
+	MenuInputOverlay_Layout,      MenuInputOverlay_ContextLost, MenuInputOverlay_ContextRecreated,
+	NULL, MenuInputOverlay_UnicodeKeyPress
 };
 void MenuInputOverlay_Show(struct MenuInputDesc* desc, const cc_string* value, MenuInputDone onDone, cc_bool screenMode) {
 	struct MenuInputOverlay* s = &MenuInputOverlay;
@@ -2803,7 +2853,7 @@ static void TexPackOverlay_UpdateLine2(struct TexPackOverlay* s) {
 }
 
 static void TexPackOverlay_UpdateLine3(struct TexPackOverlay* s) {
-	cc_string contents; char contentsBuffer[STRING_SIZE];
+	cc_string contents; char contentsBuffer[STRING_SIZE * 4];
 	float contentLengthMB;
 
 	if (s->deny) {
@@ -2811,7 +2861,7 @@ static void TexPackOverlay_UpdateLine3(struct TexPackOverlay* s) {
 	} else if (s->contentLength) {
 		String_InitArray(contents, contentsBuffer);
 		contentLengthMB = s->contentLength / (1024.0f * 1024.0f);
-		String_Format1(&contents, "Download size: %f3 MB", &contentLengthMB);
+		String_Format1(&contents, Lang_Get("Download size: %f3 MB"), &contentLengthMB);
 		TextWidget_Set(&s->lbls[3], &contents, &s->textFont);
 	} else if (s->gotContent) {
 		TextWidget_SetConst(&s->lbls[3], "Download size: Unknown", &s->textFont);

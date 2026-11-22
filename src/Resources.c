@@ -726,6 +726,168 @@ static const char* CCTextures_GetRequestName(int reqID) {
 	return reqID == ccTexturesReqID ? "ClassiCube textures" : NULL;
 }
 
+/*########################################################################################################################*
+*------------------------------------------------------CC language assets-------------------------------------------------*
+*#########################################################################################################################*/
+#define MAX_LANGUAGE_ASSETS 128
+#define LANGUAGE_FILENAME_MAX 64
+struct CCLanguageAsset {
+	char filename[LANGUAGE_FILENAME_MAX];
+	int reqID;
+	cc_bool downloaded;
+};
+static struct CCLanguageAsset ccLanguageAssets[MAX_LANGUAGE_ASSETS];
+static int numCCLanguageAssets;
+static int ccLanguagesManifestReqID = -1;
+static cc_bool ccLanguagesManifestLoaded;
+extern cc_bool Fetcher_Working, Fetcher_Failed;
+
+static cc_bool CCLanguages_ValidFilename(const char* name, int len) {
+	int i;
+	if (len < 6 || len >= LANGUAGE_FILENAME_MAX) return false;
+	if (name[0] == '.' || name[0] == '/') return false;
+	for (i = 0; i < len; i++) {
+		if (name[i] == '/' || name[i] == '\\' || name[i] == ':' || name[i] == '.') {
+			if (name[i] == '.' && i == len - 5 &&
+				name[i+1] == 'j' && name[i+2] == 's' && name[i+3] == 'o' && name[i+4] == 'n') continue;
+			return false;
+		}
+	}
+	return name[len-5] == '.' && name[len-4] == 'j' && name[len-3] == 's' &&
+		name[len-2] == 'o' && name[len-1] == 'n';
+}
+
+static cc_bool CCLanguages_AlreadyListed(const char* filename) {
+	int i, j;
+	for (i = 0; i < numCCLanguageAssets; i++) {
+		const char* existing = ccLanguageAssets[i].filename;
+		for (j = 0; existing[j] && filename[j]; j++) {
+			char a = existing[j], b = filename[j];
+			if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+			if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+			if (a != b) break;
+		}
+		if (!existing[j] && !filename[j]) return true;
+	}
+	return false;
+}
+
+static void CCLanguages_AddFromManifest(struct HttpRequest* item) {
+	cc_string path;
+	char pathBuffer[STRING_SIZE];
+	cc_filepath rawPath;
+	int pos = 0;
+
+	while (pos < item->size && numCCLanguageAssets < MAX_LANGUAGE_ASSETS) {
+		char filename[LANGUAGE_FILENAME_MAX];
+		int len = 0;
+		while (pos < item->size && (item->data[pos] == '\r' || item->data[pos] == '\n' || item->data[pos] == ' ' || item->data[pos] == '\t')) pos++;
+		while (pos < item->size && item->data[pos] != '\r' && item->data[pos] != '\n') {
+			if (len < LANGUAGE_FILENAME_MAX - 1) filename[len++] = (char)item->data[pos];
+			else len = LANGUAGE_FILENAME_MAX;
+			pos++;
+		}
+		while (pos < item->size && (item->data[pos] == '\r' || item->data[pos] == '\n')) pos++;
+		if (!len || len >= LANGUAGE_FILENAME_MAX || filename[0] == '#') continue;
+		filename[len] = '\0';
+		if (!CCLanguages_ValidFilename(filename, len) || CCLanguages_AlreadyListed(filename)) continue;
+
+		Mem_Copy(ccLanguageAssets[numCCLanguageAssets].filename, filename, len + 1);
+		ccLanguageAssets[numCCLanguageAssets].reqID = -1;
+		ccLanguageAssets[numCCLanguageAssets].downloaded = false;
+
+		String_InitArray(path, pathBuffer);
+		String_Format1(&path, "languages/%c", filename);
+		Platform_EncodePath(&rawPath, &path);
+		if (File_Exists(&rawPath)) ccLanguageAssets[numCCLanguageAssets].downloaded = true;
+		numCCLanguageAssets++;
+	}
+}
+
+static void CCLanguages_CheckExistence(void) {
+	ccLanguagesManifestReqID = -1;
+	ccLanguagesManifestLoaded = false;
+	numCCLanguageAssets = 0;
+}
+
+static void CCLanguages_CountMissing(void) {
+	/* The manifest is checked every launch so languages can be added server-side. */
+	Resources_MissingCount++;
+	Resources_MissingSize++;
+}
+
+static void CCLanguages_DownloadAssets(void) {
+	static cc_string url = String_FromConst(RESOURCE_SERVER "/languages.txt");
+	ccLanguagesManifestReqID = Http_AsyncGetData(&url, 0);
+}
+
+static const char* CCLanguages_GetRequestName(int reqID) {
+	int i;
+	if (reqID == ccLanguagesManifestReqID) return "languages.txt";
+	for (i = 0; i < numCCLanguageAssets; i++) {
+		if (ccLanguageAssets[i].reqID == reqID) return ccLanguageAssets[i].filename;
+	}
+	return NULL;
+}
+
+static void CCLanguages_CheckStatus(void) {
+	struct HttpRequest item;
+	cc_string path, url;
+	char pathBuffer[STRING_SIZE], urlBuffer[URL_MAX_SIZE];
+	cc_result res;
+	int i;
+
+	if (!Fetcher_Working) return;
+	if (!ccLanguagesManifestLoaded) {
+		if (!Fetcher_Get(ccLanguagesManifestReqID, &item)) return;
+		ccLanguagesManifestLoaded = true;
+		CCLanguages_AddFromManifest(&item);
+		HttpRequest_Free(&item);
+
+		for (i = 0; i < numCCLanguageAssets; i++) {
+			struct CCLanguageAsset* asset = &ccLanguageAssets[i];
+			if (asset->downloaded) continue;
+			Resources_MissingCount++;
+			String_InitArray(url, urlBuffer);
+			String_Format1(&url, RESOURCE_SERVER "/languages/%c", asset->filename);
+			asset->reqID = Http_AsyncGetData(&url, 0);
+		}
+	}
+
+	for (i = 0; i < numCCLanguageAssets; i++) {
+		struct CCLanguageAsset* asset = &ccLanguageAssets[i];
+		if (asset->downloaded || asset->reqID < 0) continue;
+		if (!Fetcher_Get(asset->reqID, &item)) continue;
+
+		String_InitArray(path, pathBuffer);
+		String_Format1(&path, "languages/%c", asset->filename);
+		res = Stream_WriteAllTo(&path, item.data, item.size);
+		if (res) Logger_SysWarn(res, "saving language file");
+		else asset->downloaded = true;
+		HttpRequest_Free(&item);
+	}
+}
+
+static void CCLanguages_ResetState(void) {
+	int i;
+	ccLanguagesManifestReqID = -1;
+	ccLanguagesManifestLoaded = false;
+	numCCLanguageAssets = 0;
+	for (i = 0; i < MAX_LANGUAGE_ASSETS; i++) {
+		ccLanguageAssets[i].reqID = -1;
+		ccLanguageAssets[i].downloaded = false;
+		ccLanguageAssets[i].filename[0] = '\0';
+	}
+}
+
+static const struct AssetSet ccLanguagesAssetSet = {
+	CCLanguages_CheckExistence,
+	CCLanguages_CountMissing,
+	CCLanguages_DownloadAssets,
+	CCLanguages_GetRequestName,
+	CCLanguages_CheckStatus,
+	CCLanguages_ResetState
+};
 
 /*########################################################################################################################*
 *-------------------------------------------------CC texture assets processing -------------------------------------------*
@@ -783,7 +945,6 @@ static const struct AssetSet ccTexsAssetSet = {
 	CCTextures_ResetState
 };
 
-
 /*########################################################################################################################*
 *----------------------------------------------------default.zip resources------------------------------------------------*
 *#########################################################################################################################*/
@@ -825,6 +986,35 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "touch.png", RESOURCE_TYPE_DATA }
 #endif
 };
+
+/* Unicode pages are listed by RESOURCE_SERVER "/unicode.txt" and stored in default.zip. */
+#define MAX_UNICODE_PAGES 128
+static struct ResourceZipEntry unicodeZipEntries[MAX_UNICODE_PAGES];
+static char unicodeZipNames[MAX_UNICODE_PAGES][32];
+static int unicodeZipReqIDs[MAX_UNICODE_PAGES];
+static cc_bool unicodeZipDownloaded[MAX_UNICODE_PAGES];
+static cc_bool unicodeZipPresent[MAX_UNICODE_PAGES];
+static int numUnicodeZipEntries;
+static int unicodeManifestReqID = -1;
+static cc_bool unicodeManifestLoaded, unicodeBuildNeeded, unicodeSourcesStarted;
+static cc_bool allZipEntriesExist;
+
+/* Unicode page names use four hexadecimal digits, e.g. unicode-0004.png. */
+static cc_bool ModernPatcher_IsUnicodePage(const cc_string* path) {
+	cc_string name = *path;
+	int i;
+	Utils_UNSAFE_GetFilename(&name);
+	if (name.length != 16) return false;
+	if (name.buffer[0] != 'u' || name.buffer[1] != 'n' || name.buffer[2] != 'i' ||
+		name.buffer[3] != 'c' || name.buffer[4] != 'o' || name.buffer[5] != 'd' ||
+		name.buffer[6] != 'e' || name.buffer[7] != '-') return false;
+	for (i = 8; i < 12; i++) {
+		char c = name.buffer[i];
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+	}
+	return name.buffer[12] == '.' && name.buffer[13] == 'p' &&
+		name.buffer[14] == 'n' && name.buffer[15] == 'g';
+}
 
 CC_NOINLINE static struct ResourceZipEntry* ZipEntries_Find(const cc_string* name) {
 	struct ResourceZipEntry* e;
@@ -871,22 +1061,40 @@ static struct ZipfileSource defaultZipSources_0030_0023[] = {
 	{ "0.0.23 black", "https://classic.minecraft.net/assets/textures/color13.png",   Classic0023Patcher_OldBlackWool, 1 },
 	{ "0.0.23 gray",  "https://classic.minecraft.net/assets/textures/color14.png",   Classic0023Patcher_OldGrayWool,  1 },
 };
+static int zipEntriesFound;
+static int numDefaultZipProcessed, numDefaultZipSources;
 static struct ZipfileSource* defaultZipSources;
-static int numDefaultZipSources, numDefaultZipProcessed;
+static cc_bool unicodeZipAllPresent, unicodeZipStale, defaultZipSourcesDone, defaultZipCreated;
 
 static void MCCTextures_ResetState(void) {
 	int i;
-	for (i = 0; i < Array_Elems(defaultZipEntries); i++) 
-	{
+	for (i = 0; i < numUnicodeZipEntries; i++) {
+		Mem_Free(unicodeZipEntries[i].value.data);
+		unicodeZipEntries[i].value.data = NULL;
+	}
+	numUnicodeZipEntries = 0;
+	unicodeManifestReqID = -1;
+	unicodeManifestLoaded = false;
+	unicodeBuildNeeded = false;
+	unicodeSourcesStarted = false;
+	unicodeZipAllPresent = false;
+	unicodeZipStale = false;
+	defaultZipSourcesDone = false;
+	defaultZipCreated = false;
+	numDefaultZipProcessed = 0;
+	for (i = 0; i < MAX_UNICODE_PAGES; i++) {
+		unicodeZipReqIDs[i] = -1;
+		unicodeZipDownloaded[i] = false;
+		unicodeZipPresent[i] = false;
+		unicodeZipNames[i][0] = '\0';
+	}
+	for (i = 0; i < Array_Elems(defaultZipEntries); i++) {
 		if (defaultZipEntries[i].type == RESOURCE_TYPE_CONST) continue;
-
-		/* can reuse value.data for value.bmp case too */
 		Mem_Free(defaultZipEntries[i].value.data);
 		defaultZipEntries[i].value.data = NULL;
-		defaultZipEntries[i].size       = 0;
+		defaultZipEntries[i].size = 0;
 	}
 }
-
 
 /*########################################################################################################################*
 *------------------------------------------------default.zip entry generators---------------------------------------------*
@@ -901,17 +1109,11 @@ static cc_result ClassicPatcher_ProcessEntry(const cc_string* path, struct Strea
 	static const cc_string guiClassicPng = String_FromConst("gui_classic.png");
 	struct ResourceZipEntry* e;
 	cc_string name;
-
 	name = *path;
 	Utils_UNSAFE_GetFilename(&name);
 	if (String_CaselessEqualsConst(&name, "gui.png")) name = guiClassicPng;
-
 	e = ZipEntries_Find(&name);
-
-	/* terrain.png requires special handling */
-	if (String_CaselessEqualsConst(path, "terrain.png")) {
-		return Png_Decode(&e->value.bmp, data);
-	}
+	if (String_CaselessEqualsConst(path, "terrain.png")) return Png_Decode(&e->value.bmp, data);
 	return ZipEntry_ExtractData(e, data, source);
 }
 
@@ -920,22 +1122,16 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req) {
 	cc_result res;
 	struct ZipEntry entries[64];
 	Stream_ReadonlyMemory(&src, req->data, req->size);
-	
-	return Zip_Extract(&src, 
-			ClassicPatcher_SelectEntry, ClassicPatcher_ProcessEntry,
-			entries, Array_Elems(entries));
+	return Zip_Extract(&src, ClassicPatcher_SelectEntry, ClassicPatcher_ProcessEntry, entries, Array_Elems(entries));
 }
 
 static void PatchTerrainTile(struct Bitmap* src, int srcX, int srcY, int tileX, int tileY) {
 	static const cc_string terrainPng = String_FromConst("terrain.png");
-	struct ResourceZipEntry* entry    = ZipEntries_Find(&terrainPng);
+	struct ResourceZipEntry* entry = ZipEntries_Find(&terrainPng);
 	struct Bitmap* dst = &entry->value.bmp;
-	/* Can happen sometimes happen when allocating memory for terrain.png fails */
 	if (!dst->scan0) return;
-
 	Bitmap_UNSAFE_CopyBlock(srcX, srcY, tileX * 16, tileY * 16, src, dst, 16);
 }
-
 
 /* the x,y of tiles in terrain.png which get patched */
 static const struct TilePatch { const char* name; cc_uint8 x1,y1, x2,y2; } modern_tiles[12] = {
@@ -946,64 +1142,48 @@ static const struct TilePatch { const char* name; cc_uint8 x1,y1, x2,y2; } moder
 	{ "assets/minecraft/textures/blocks/quartz_block_lines.png", 10,2 },
 	{ "assets/minecraft/textures/blocks/stonebrick.png", 4,3 },
 	{ "assets/minecraft/textures/blocks/snow.png", 2,3 },
-	{ "assets/minecraft/textures/blocks/wool_colored_blue.png",  3,5 },
+	{ "assets/minecraft/textures/blocks/wool_colored_blue.png", 3,5 },
 	{ "assets/minecraft/textures/blocks/wool_colored_brown.png", 2,5 },
-	{ "assets/minecraft/textures/blocks/wool_colored_cyan.png",  4,5 },
+	{ "assets/minecraft/textures/blocks/wool_colored_cyan.png", 4,5 },
 	{ "assets/minecraft/textures/blocks/wool_colored_green.png", 1,5 },
-	{ "assets/minecraft/textures/blocks/wool_colored_pink.png",  0,5 }
+	{ "assets/minecraft/textures/blocks/wool_colored_pink.png", 0,5 }
 };
 
 CC_NOINLINE static const struct TilePatch* ModernPatcher_GetTile(const cc_string* path) {
 	int i;
-	for (i = 0; i < Array_Elems(modern_tiles); i++) {
-		if (String_CaselessEqualsConst(path, modern_tiles[i].name)) return &modern_tiles[i];
-	}
+	for (i = 0; i < Array_Elems(modern_tiles); i++) if (String_CaselessEqualsConst(path, modern_tiles[i].name)) return &modern_tiles[i];
 	return NULL;
 }
 
 static cc_result ModernPatcher_PatchTile(struct Stream* data, const struct TilePatch* tile) {
 	struct Bitmap bmp;
 	cc_result res;
-
 	if ((res = Png_Decode(&bmp, data))) return res;
 	PatchTerrainTile(&bmp, 0, 0, tile->x1, tile->y1);
-
-	/* only quartz needs copying to two tiles */
 	if (tile->y2) PatchTerrainTile(&bmp, 0, 0, tile->x2, tile->y2);
-
 	Mem_Free(bmp.scan0);
 	return 0;
 }
 
-
 static cc_bool ModernPatcher_SelectEntry(const cc_string* path) {
-	return
-		String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png") ||
-		String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")   ||
+	return String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png") ||
+		String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png") ||
 		String_CaselessEqualsConst(path, "assets/minecraft/textures/blocks/fire_layer_1.png") ||
 		ModernPatcher_GetTile(path) != NULL;
 }
 
 static cc_result ModernPatcher_MakeAnimations(struct Stream* data) {
 	static const cc_string animsPng = String_FromConst("animations.png");
-	struct ResourceZipEntry* entry;
-	struct Bitmap* anim;
+	struct ResourceZipEntry* entry = ZipEntries_Find(&animsPng);
+	struct Bitmap* anim = &entry->value.bmp;
 	struct Bitmap bmp;
 	cc_result res;
 	int i;
-
-	entry = ZipEntries_Find(&animsPng);
-	anim  = &entry->value.bmp;
 	Bitmap_TryAllocate(anim, 512, 16);
-
 	if (!anim->scan0) return ERR_OUT_OF_MEMORY;
 	if ((res = Png_Decode(&bmp, data))) return res;
-
-	for (i = 0; i < 512; i += 16) {
-		Bitmap_UNSAFE_CopyBlock(0, i, i, 0, &bmp, anim, 16);
-	}
-
-	Mem_Free(bmp.scan0); 
+	for (i = 0; i < 512; i += 16) Bitmap_UNSAFE_CopyBlock(0, i, i, 0, &bmp, anim, 16);
+	Mem_Free(bmp.scan0);
 	return 0;
 }
 
@@ -1011,20 +1191,14 @@ static cc_result ModernPatcher_ProcessEntry(const cc_string* path, struct Stream
 	struct ResourceZipEntry* e;
 	const struct TilePatch* tile;
 	cc_string name;
-
-	if (String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png")
-		|| String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")) {
+	if (String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png") ||
+		String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")) {
 		name = *path;
 		Utils_UNSAFE_GetFilename(&name);
-
 		e = ZipEntries_Find(&name);
 		return ZipEntry_ExtractData(e, data, source);
 	}
-
-	if (String_CaselessEqualsConst(path, "assets/minecraft/textures/blocks/fire_layer_1.png")) {
-		return ModernPatcher_MakeAnimations(data);
-	}
-
+	if (String_CaselessEqualsConst(path, "assets/minecraft/textures/blocks/fire_layer_1.png")) return ModernPatcher_MakeAnimations(data);
 	tile = ModernPatcher_GetTile(path);
 	return ModernPatcher_PatchTile(data, tile);
 }
@@ -1033,29 +1207,21 @@ static cc_result ModernPatcher_ExtractFiles(struct HttpRequest* req) {
 	struct Stream src;
 	struct ZipEntry entries[64];
 	Stream_ReadonlyMemory(&src, req->data, req->size);
-
-	return Zip_Extract(&src, 
-			ModernPatcher_SelectEntry, ModernPatcher_ProcessEntry,
-			entries, Array_Elems(entries));
+	return Zip_Extract(&src, ModernPatcher_SelectEntry, ModernPatcher_ProcessEntry, entries, Array_Elems(entries));
 }
-
 
 static cc_result TerrainPatcher_Process(struct HttpRequest* req) {
 	struct Bitmap bmp;
 	struct Stream src;
 	cc_result res;
-
 	Stream_ReadonlyMemory(&src, req->data, req->size);
 	if ((res = Png_Decode(&bmp, &src))) return res;
-
-	PatchTerrainTile(&bmp,  0,0, 3,3);
+	PatchTerrainTile(&bmp, 0,0, 3,3);
 	PatchTerrainTile(&bmp, 16,0, 6,3);
 	PatchTerrainTile(&bmp, 32,0, 6,2);
-
-	PatchTerrainTile(&bmp,  0,16,  5,3);
-	PatchTerrainTile(&bmp, 16,16,  6,5);
+	PatchTerrainTile(&bmp, 0,16, 5,3);
+	PatchTerrainTile(&bmp, 16,16, 6,5);
 	PatchTerrainTile(&bmp, 32,16, 11,0);
-
 	Mem_Free(bmp.scan0);
 	return 0;
 }
@@ -1063,11 +1229,9 @@ static cc_result TerrainPatcher_Process(struct HttpRequest* req) {
 static cc_result NewTextures_ExtractGui(struct HttpRequest* req) {
 	static const cc_string guiPng = String_FromConst("gui.png");
 	struct ResourceZipEntry* entry = ZipEntries_Find(&guiPng);
-
 	entry->value.data = req->data;
-	entry->size       = req->size;
-
-	req->data = NULL; /* don't free memory yet */
+	entry->size = req->size;
+	req->data = NULL;
 	return 0;
 }
 
@@ -1075,152 +1239,249 @@ static cc_result Classic0023Patcher_PatchBlocks(struct HttpRequest* req, const i
 	struct Bitmap bmp;
 	struct Stream src;
 	cc_result res;
-
 	Stream_ReadonlyMemory(&src, req->data, req->size);
 	if ((res = Png_Decode(&bmp, &src))) return res;
-
-	while (*targets)
-	{
-		PatchTerrainTile(&bmp, 0,0, *targets >> 8, *targets & 0xFF);
-		targets++;
-	}
-
+	while (*targets) { PatchTerrainTile(&bmp, 0,0, *targets >> 8, *targets & 0xFF); targets++; }
 	Mem_Free(bmp.scan0);
 	return 0;
 }
-
 static cc_result Classic0023Patcher_OldGoldBlock(struct HttpRequest* req) {
 	static const int targets[] = { (8 << 8) | 1, (8 << 8) | 2, (8 << 8) | 3, 0 };
-
 	return Classic0023Patcher_PatchBlocks(req, targets);
 }
-
 static cc_result Classic0023Patcher_OldGoldOre(struct HttpRequest* req) {
 	static const int targets[] = { (0 << 8) | 2, 0 };
-
 	return Classic0023Patcher_PatchBlocks(req, targets);
 }
-
 static cc_result Classic0023Patcher_OldBlackWool(struct HttpRequest* req) {
 	static const int targets[] = { (13 << 8) | 4, 0 };
-
 	return Classic0023Patcher_PatchBlocks(req, targets);
 }
-
 static cc_result Classic0023Patcher_OldGrayWool(struct HttpRequest* req) {
 	static const int targets[] = { (14 << 8) | 4, 0 };
-
 	return Classic0023Patcher_PatchBlocks(req, targets);
 }
-
 
 /*########################################################################################################################*
 *-----------------------------------------------Minecraft Classic texture assets------------------------------------------*
 *#########################################################################################################################*/
-static cc_bool allZipEntriesExist;
-static int zipEntriesFound;
-
 static cc_bool DefaultZip_SelectEntry(const cc_string* path) {
 	cc_string name = *path;
 	Utils_UNSAFE_GetFilename(&name);
-
 	if (ZipEntries_Find(&name)) zipEntriesFound++;
 	return false;
 }
 
+static cc_bool UnicodeZip_SelectEntry(const cc_string* path) {
+	cc_string name = *path;
+	int i;
+	Utils_UNSAFE_GetFilename(&name);
+	for (i = 0; i < numUnicodeZipEntries; i++) {
+		if (String_CaselessEqualsConst(&name, unicodeZipNames[i])) {
+			unicodeZipPresent[i] = true;
+			return false;
+		}
+	}
+	if (ModernPatcher_IsUnicodePage(&name)) unicodeZipStale = true;
+	return false;
+}
+
+static void MCCTextures_SetSources(void) {
+	if (Game_Version.Version > VERSION_0023) {
+		numDefaultZipSources = DEFAULTZIP_0030_ENTRIES_COUNT;
+		defaultZipSources = defaultZipSources_0030_0023;
+	} else {
+		numDefaultZipSources = Array_Elems(defaultZipSources_0030_0023);
+		defaultZipSources = defaultZipSources_0030_0023;
+	}
+}
+
 static void MCCTextures_CheckExistence(void) {
-	cc_string path  = String_FromReadonly(Game_Version.DefaultTexpack);
+	cc_string path = String_FromReadonly(Game_Version.DefaultTexpack);
 	zipEntriesFound = 0;
-
 	ZipFile_InspectEntries(&path, DefaultZip_SelectEntry);
-	/* >= in case somehow have say "gui.png", "GUI.png" */
 	allZipEntriesExist = zipEntriesFound >= Array_Elems(defaultZipEntries);
-
-	/* Need touch.png from ClassiCube textures */
 	if (!allZipEntriesExist) ccTexturesExist = false;
 }
 
 static void MCCTextures_CountMissing(void) {
 	int i;
+	/* Always refresh the manifest; it is what makes server-side additions dynamic. */
+	Resources_MissingCount++;
+	Resources_MissingSize++;
 	if (allZipEntriesExist) return;
-
-	/* old gold texture only needed in 0.0.23 and earlier */
-	if (Game_Version.Version > VERSION_0023) {
-		numDefaultZipSources = DEFAULTZIP_0030_ENTRIES_COUNT;
-		defaultZipSources    = defaultZipSources_0030_0023;
-	} else {
-		numDefaultZipSources = Array_Elems(defaultZipSources_0030_0023);
-		defaultZipSources    = defaultZipSources_0030_0023;
-	}
-
+	MCCTextures_SetSources();
 	for (i = 0; i < numDefaultZipSources; i++) {
 		Resources_MissingCount++;
 		Resources_MissingSize += defaultZipSources[i].size;
 	}
 }
 
-
-/*########################################################################################################################*
-*------------------------------------------Minecraft Classic texture assets fetching -------------------------------------*
-*#########################################################################################################################*/
 static void MCCTextures_DownloadAssets(void) {
-	cc_string url;
-	int i;
-	if (allZipEntriesExist) return;
-	numDefaultZipProcessed = 0;
-
-	for (i = 0; i < numDefaultZipSources; i++)
-	{
-		url = String_FromReadonly(defaultZipSources[i].url);
-		defaultZipSources[i].reqID = Http_AsyncGetData(&url, 0);
-		defaultZipSources[i].downloaded = false;
-	}
+	static cc_string url = String_FromConst(RESOURCE_SERVER "/unicode.txt");
+	unicodeManifestReqID = Http_AsyncGetData(&url, 0);
 }
 
 static const char* MCCTextures_GetRequestName(int reqID) {
 	int i;
-	for (i = 0; i < numDefaultZipSources; i++) 
-	{
-		if (reqID == defaultZipSources[i].reqID) return defaultZipSources[i].name;
+	if (reqID == unicodeManifestReqID) return "unicode.txt";
+	for (i = 0; i < numUnicodeZipEntries; i++) {
+		if (unicodeZipReqIDs[i] == reqID) return unicodeZipNames[i];
+	}
+	for (i = 0; i < numDefaultZipSources; i++) {
+		if (defaultZipSources[i].reqID == reqID) return defaultZipSources[i].name;
 	}
 	return NULL;
 }
 
-
-/*########################################################################################################################*
-*------------------------------------------Minecraft Classic texture assets processing -----------------------------------*
-*#########################################################################################################################*/
 static void MCCTextures_CreateDefaultZip(void) {
 	cc_string path = String_FromReadonly(Game_Version.DefaultTexpack);
-	ZipFile_Create(&path, defaultZipEntries, Array_Elems(defaultZipEntries));
-	MCCTextures_ResetState();
+	struct ResourceZipEntry entries[Array_Elems(defaultZipEntries) + MAX_UNICODE_PAGES];
+	int i, count = Array_Elems(defaultZipEntries);
+	for (i = 0; i < count; i++) entries[i] = defaultZipEntries[i];
+	for (i = 0; i < numUnicodeZipEntries; i++) entries[count + i] = unicodeZipEntries[i];
+	ZipFile_Create(&path, entries, count + numUnicodeZipEntries);
+	defaultZipCreated = true;
+}
+
+static void MCCTextures_TryCreateDefaultZip(void) {
+	int i;
+	if (!unicodeBuildNeeded || !defaultZipSourcesDone || defaultZipCreated) return;
+	for (i = 0; i < numUnicodeZipEntries; i++) if (!unicodeZipDownloaded[i]) return;
+	MCCTextures_CreateDefaultZip();
+}
+
+static void MCCTextures_StartBuild(void) {
+	cc_string url;
+	int i;
+	if (unicodeSourcesStarted) return;
+	unicodeSourcesStarted = true;
+	unicodeBuildNeeded = true;
+
+	if (allZipEntriesExist) {
+		MCCTextures_SetSources();
+		for (i = 0; i < numDefaultZipSources; i++) {
+			Resources_MissingCount++;
+			Resources_MissingSize += defaultZipSources[i].size;
+		}
+	}
+
+	Resources_MissingCount += numUnicodeZipEntries;
+	Resources_MissingSize += numUnicodeZipEntries;
+	numDefaultZipProcessed = 0;
+	defaultZipSourcesDone = false;
+	for (i = 0; i < numDefaultZipSources; i++) {
+		url = String_FromReadonly(defaultZipSources[i].url);
+		defaultZipSources[i].reqID = Http_AsyncGetData(&url, 0);
+		defaultZipSources[i].downloaded = false;
+	}
+	for (i = 0; i < numUnicodeZipEntries; i++) {
+		cc_string pageURL;
+		char pageURLBuffer[URL_MAX_SIZE];
+		String_InitArray(pageURL, pageURLBuffer);
+		String_Format1(&pageURL, RESOURCE_SERVER "/unicode/%c", unicodeZipNames[i]);
+		unicodeZipReqIDs[i] = Http_AsyncGetData(&pageURL, 0);
+		unicodeZipDownloaded[i] = false;
+	}
+}
+
+static void MCCTextures_ParseUnicodeManifest(struct HttpRequest* item) {
+	int pos = 0;
+	cc_string path = String_FromReadonly(Game_Version.DefaultTexpack);
+	while (pos < item->size && numUnicodeZipEntries < MAX_UNICODE_PAGES) {
+		char filename[32];
+		int len = 0, i;
+		cc_string name;
+		while (pos < item->size && (item->data[pos] == '\r' || item->data[pos] == '\n' || item->data[pos] == ' ' || item->data[pos] == '\t')) pos++;
+		while (pos < item->size && item->data[pos] != '\r' && item->data[pos] != '\n') {
+			if (len < (int)sizeof(filename) - 1) filename[len++] = (char)item->data[pos];
+			else len = sizeof(filename);
+			pos++;
+		}
+		while (pos < item->size && (item->data[pos] == '\r' || item->data[pos] == '\n')) pos++;
+		if (!len || len >= (int)sizeof(filename)) continue;
+		filename[len] = '\0';
+		for (i = 0; i < len; i++) {
+			if (filename[i] == '/' || filename[i] == '\\' || filename[i] == ':') break;
+		}
+		if (i != len) continue;
+		name = String_FromReadonly(filename);
+		if (!ModernPatcher_IsUnicodePage(&name)) continue;
+		for (i = 0; i < numUnicodeZipEntries; i++) if (String_CaselessEqualsConst(&name, unicodeZipNames[i])) break;
+		if (i != numUnicodeZipEntries) continue;
+		Mem_Copy(unicodeZipNames[numUnicodeZipEntries], filename, len + 1);
+		unicodeZipEntries[numUnicodeZipEntries].filename = unicodeZipNames[numUnicodeZipEntries];
+		unicodeZipEntries[numUnicodeZipEntries].type = RESOURCE_TYPE_DATA;
+		unicodeZipEntries[numUnicodeZipEntries].size = 0;
+		unicodeZipEntries[numUnicodeZipEntries].value.data = NULL;
+		unicodeZipReqIDs[numUnicodeZipEntries] = -1;
+		unicodeZipDownloaded[numUnicodeZipEntries] = false;
+		unicodeZipPresent[numUnicodeZipEntries] = false;
+		numUnicodeZipEntries++;
+	}
+
+	unicodeZipStale = false;
+	ZipFile_InspectEntries(&path, UnicodeZip_SelectEntry);
+	unicodeZipAllPresent = true;
+	{
+		int j;
+		for (j = 0; j < numUnicodeZipEntries; j++) {
+			if (!unicodeZipPresent[j]) unicodeZipAllPresent = false;
+		}
+	}
+	if (!allZipEntriesExist || !unicodeZipAllPresent || unicodeZipStale) MCCTextures_StartBuild();
+	else {
+		unicodeBuildNeeded = false;
+		defaultZipSourcesDone = true;
+	}
 }
 
 static void MCCTextures_CheckSource(struct ZipfileSource* source) {
 	struct HttpRequest item;
 	cc_result res;
 	if (!Fetcher_Get(source->reqID, &item)) return;
-	
 	source->downloaded = true;
 	res = source->Process(&item);
-
 	if (res) {
 		cc_string name = String_FromReadonly(source->name);
 		Logger_SysWarn2(res, "making", &name);
 	}
 	HttpRequest_Free(&item);
-
-	if (++numDefaultZipProcessed < numDefaultZipSources) return;
-	MCCTextures_CreateDefaultZip();
+	if (++numDefaultZipProcessed >= numDefaultZipSources) {
+		defaultZipSourcesDone = true;
+		MCCTextures_TryCreateDefaultZip();
+	}
 }
 
 static void MCCTextures_CheckStatus(void) {
+	struct HttpRequest item;
 	int i;
-	for (i = 0; i < numDefaultZipSources; i++) 
-	{
+	if (!Fetcher_Working) return;
+	if (!unicodeManifestLoaded) {
+		if (!Fetcher_Get(unicodeManifestReqID, &item)) return;
+		unicodeManifestLoaded = true;
+		MCCTextures_ParseUnicodeManifest(&item);
+		HttpRequest_Free(&item);
+	}
+	if (!unicodeBuildNeeded) return;
+	for (i = 0; i < numUnicodeZipEntries; i++) {
+		if (unicodeZipDownloaded[i] || unicodeZipReqIDs[i] < 0) continue;
+		if (!Fetcher_Get(unicodeZipReqIDs[i], &item)) {
+			if (Fetcher_Failed) return;
+			continue;
+		}
+		unicodeZipEntries[i].value.data = item.data;
+		unicodeZipEntries[i].size = item.size;
+		item.data = NULL;
+		unicodeZipDownloaded[i] = true;
+		HttpRequest_Free(&item);
+	}
+	for (i = 0; i < numDefaultZipSources; i++) {
 		if (defaultZipSources[i].downloaded) continue;
 		MCCTextures_CheckSource(&defaultZipSources[i]);
+		if (Fetcher_Failed) return;
 	}
+	MCCTextures_TryCreateDefaultZip();
 }
 
 static const struct AssetSet mccTexsAssetSet = {
@@ -1242,6 +1503,7 @@ FetcherErrorCallback Fetcher_ErrorCallback;
 
 static const struct AssetSet* const asset_sets[] = {
 	&ccTexsAssetSet,
+	&ccLanguagesAssetSet,
 	&mccTexsAssetSet,
 #ifndef CC_BUILD_NOMUSIC
 	&mccMusicAssetSet,
@@ -1303,6 +1565,7 @@ void Fetcher_Run(void) {
 
 	Utils_EnsureDirectory("texpacks");
 	Utils_EnsureDirectory("audio");
+	Utils_EnsureDirectory("languages");
 }
 
 static void Fetcher_Finish(void) {

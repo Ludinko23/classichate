@@ -66,7 +66,137 @@ static struct Bitmap fontBitmap;
 static int tileSize = 8; /* avoid divide by 0 if default.png missing */
 /* So really 16 characters per row */
 #define LOG2_CHARS_PER_ROW 4
+
 static int tileWidths[256];
+
+#define UNICODE_FONT_PAGES 128
+struct UnicodeFontPage {
+	cc_uint32 base;
+	struct Bitmap bmp;
+	int widths[256];
+};
+static struct UnicodeFontPage unicodePages[UNICODE_FONT_PAGES];
+static cc_bool unicodeFontAtlasReady;
+
+static void UnicodePage_Free(struct UnicodeFontPage* page) {
+	if (page->bmp.scan0) Mem_Free(page->bmp.scan0);
+	Mem_Set(page, 0, sizeof(*page));
+}
+
+static void UnicodePages_Reset(void* obj) {
+	int i;
+	for (i = 0; i < UNICODE_FONT_PAGES; i++) UnicodePage_Free(&unicodePages[i]);
+	unicodeFontAtlasReady = false;
+}
+
+static struct UnicodeFontPage* UnicodePage_Find(cc_uint32 base) {
+	int i;
+	for (i = 0; i < UNICODE_FONT_PAGES; i++) {
+		if (unicodePages[i].bmp.scan0 && unicodePages[i].base == base) {
+			return &unicodePages[i];
+		}
+	}
+	return NULL;
+}
+
+static void UnicodePage_CalculateWidths(struct UnicodeFontPage* page) {
+	int i, x, y, xx;
+	BitmapCol* row;
+	Mem_Set(page->widths, 0, sizeof(page->widths));
+	for (y = 0; y < page->bmp.height; y++) {
+		row = Bitmap_GetRow(&page->bmp, y);
+		for (x = 0; x < page->bmp.width; x += tileSize) {
+			i = (y / tileSize) * 16 + (x / tileSize);
+			for (xx = tileSize - 1; xx >= 0; xx--) {
+				if (!BitmapCol_A(row[x + xx])) continue;
+				page->widths[i] = max(page->widths[i], xx + 1);
+				break;
+			}
+		}
+	}
+	page->widths[' '] = tileSize / 4;
+}
+
+/* PNG filename format: unicode-XXXX.png, where XXXX is the Unicode page
+   number (codepoint >> 8), and each image is a 16x16 grid of glyphs. */
+static cc_bool UnicodePage_ParseName(const cc_string* name, cc_uint32* page) {
+	static const cc_string prefix = String_FromConst("unicode-");
+	cc_uint32 base = 0;
+	int i, digit;
+
+	if (name->length != 16 || !String_CaselessStarts(name, &prefix)) return false;
+	if (name->buffer[12] != '.' || name->buffer[13] != 'p'
+		|| name->buffer[14] != 'n' || name->buffer[15] != 'g') return false;
+	for (i = 8; i < 12; i++) {
+		char c = name->buffer[i];
+		if (c >= '0' && c <= '9') digit = c - '0';
+		else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+		else return false;
+		base = (base << 4) | digit;
+	}
+	if (base > 0x10FF) return false;
+	*page = base << 8;
+	return true;
+}
+
+cc_bool Drawer2D_IsUnicodePageName(const cc_string* name) {
+	cc_uint32 base;
+	return UnicodePage_ParseName(name, &base);
+}
+
+static void UnicodePage_Load(struct Stream* stream, const cc_string* name, cc_bool replace) {
+	struct Bitmap bmp;
+	struct UnicodeFontPage* page = NULL;
+	cc_uint32 base = 0;
+	int i;
+	cc_result res;
+
+	if (!UnicodePage_ParseName(name, &base)) return;
+	if (!replace && UnicodePage_Find(base)) return; /* earlier (higher priority) pack already provided it */
+
+	res = Png_Decode(&bmp, stream);
+	if (res) { Logger_SysWarn2(res, "decoding", name); Mem_Free(bmp.scan0); return; }
+	if (bmp.width != bmp.height || bmp.width < 16 || !Math_IsPowOf2(bmp.width)
+		|| (unicodeFontAtlasReady && (bmp.width != fontBitmap.width || bmp.height != fontBitmap.height))) {
+		Mem_Free(bmp.scan0);
+		return;
+	}
+	page = UnicodePage_Find(base);
+	if (!page) {
+		for (i = 0; i < UNICODE_FONT_PAGES; i++) {
+			if (!unicodePages[i].bmp.scan0) { page = &unicodePages[i]; break; }
+		}
+	}
+	if (!page) {
+		Mem_Free(bmp.scan0);
+		return; /* Keep existing page pointers stable while text is being drawn. */
+	}
+	if (page->bmp.scan0) UnicodePage_Free(page);
+	page->base = base;
+	page->bmp = bmp;
+	if (unicodeFontAtlasReady) UnicodePage_CalculateWidths(page);
+	Event_RaiseVoid(&ChatEvents.FontChanged);
+}
+
+/* In-game: raised for every file of a (newly selected) texture pack */
+static void UnicodePage_Process(void* obj, struct Stream* stream, const cc_string* name) {
+	UnicodePage_Load(stream, name, true);
+}
+
+/* Launcher: loads a page from the texture pack, unless one was already loaded */
+void Drawer2D_LoadUnicodePage(struct Stream* stream, const cc_string* name) {
+	UnicodePage_Load(stream, name, false);
+}
+
+static struct UnicodeFontPage* UnicodePage_ForCodepoint(cc_codepoint cp) {
+	return UnicodePage_Find(cp & ~0xFFu);
+}
+
+static int UnicodeGlyph_Width(int point, const int* widths, int glyph) {
+	return Math_CeilDiv(widths[glyph] * point, tileSize);
+}
+
 
 /* Finds the right-most non-transparent pixel in each tile in default.png */
 static void CalculateTextWidths(void) {
@@ -122,6 +252,18 @@ cc_bool Font_SetBitmapAtlas(struct Bitmap* bmp) {
 	tileSize   = bmp->width >> LOG2_CHARS_PER_ROW;
 
 	CalculateTextWidths();
+	unicodeFontAtlasReady = true;
+	{
+		int i;
+		for (i = 0; i < UNICODE_FONT_PAGES; i++) {
+			if (!unicodePages[i].bmp.scan0) continue;
+			if (unicodePages[i].bmp.width != bmp->width || unicodePages[i].bmp.height != bmp->height) {
+				UnicodePage_Free(&unicodePages[i]);
+			} else {
+				UnicodePage_CalculateWidths(&unicodePages[i]);
+			}
+		}
+	}
 	return true;
 }
 
@@ -454,72 +596,79 @@ void Drawer2D_Fill(struct Bitmap* bmp, int x, int y, int width, int height, Bitm
 static void DrawBitmappedTextCore(struct Bitmap* bmp, struct DrawTextArgs* args, int x, int y, cc_bool shadow) {
 	BitmapCol color;
 	cc_string text = args->text;
-	int i, point   = args->font->size, count = 0;
-
-	int xPadding;
-	int srcX, srcY, dstX, dstY;
-	int fontX, fontY;
-	int srcWidth, dstWidth;
-	int dstHeight, begX, xx, yy;
-	int cellY, underlineY, underlineHeight;
-
-	BitmapCol* srcRow, src;
+	int i, point = args->font->size, count = 0;
+	int xPadding, srcX, srcY, dstX, dstY, fontX, fontY;
+	int srcWidth, dstWidth, dstHeight, begX, xx, yy;
+	int cellY, underlineY, underlineHeight, charLen;
+	cc_codepoint cp;
+	BitmapCol* srcRow;
 	BitmapCol* dstRow;
-
+	BitmapCol src;
 	cc_uint8 coords[DRAWER2D_MAX_TEXT_LENGTH];
 	BitmapCol colors[DRAWER2D_MAX_TEXT_LENGTH];
 	cc_uint16 dstWidths[DRAWER2D_MAX_TEXT_LENGTH];
+	const struct Bitmap* glyphBmps[DRAWER2D_MAX_TEXT_LENGTH];
+	const int* glyphWidths[DRAWER2D_MAX_TEXT_LENGTH];
 
 	color = Drawer2D.Colors['f'];
 	if (shadow) color = GetShadowColor(color);
 
-	for (i = 0; i < text.length; i++) {
+	for (i = 0; i < text.length; ) {
 		char c = text.buffer[i];
 		if (c == '&' && Drawer2D_ValidColorCodeAt(&text, i + 1)) {
 			color = Drawer2D_GetColor(text.buffer[i + 1]);
-
 			if (shadow) color = GetShadowColor(color);
-			i++; continue; /* skip over the color code */
+			i += 2; continue;
 		}
-
-		coords[count] = c;
+		cp = String_GetCodepoint(&text, i, &charLen);
+		if (!charLen) break;
+		glyphBmps[count] = &fontBitmap;
+		glyphWidths[count] = tileWidths;
+		if (charLen == 1) {
+			coords[count] = (cc_uint8)c;
+			dstWidths[count] = Drawer2D_Width(point, c);
+		} else {
+			struct UnicodeFontPage* page = UnicodePage_ForCodepoint(cp);
+			int glyph = (int)(cp & 0xFF);
+			char cp437;
+			if (page) {
+				glyphBmps[count] = &page->bmp;
+				glyphWidths[count] = page->widths;
+			} else if (Convert_TryCodepointToCP437(cp, &cp437)) {
+				glyph = (cc_uint8)cp437;
+			} else {
+				glyph = '?';
+			}
+			coords[count] = (cc_uint8)glyph;
+			dstWidths[count] = UnicodeGlyph_Width(point, glyphWidths[count], glyph);
+		}
 		colors[count] = color;
-		dstWidths[count] = Drawer2D_Width(point, c);
 		count++;
+		i += charLen;
 	}
 
 	dstHeight = point; begX = x;
-	/* adjust coords to make drawn text match GDI fonts */
 	y += (args->font->height - dstHeight) / 2;
-	xPadding  = Drawer2D_XPadding(point);
+	xPadding = Drawer2D_XPadding(point);
 
 	for (yy = 0; yy < dstHeight; yy++) {
 		dstY = y + yy;
 		if ((unsigned)dstY >= (unsigned)bmp->height) continue;
-
-		fontY  = 0 + yy * tileSize / dstHeight;
+		fontY = yy * tileSize / dstHeight;
 		dstRow = Bitmap_GetRow(bmp, dstY);
-
 		for (i = 0; i < count; i++) {
-			srcX   = (coords[i] & 0x0F) * tileSize;
-			srcY   = (coords[i] >> 4)   * tileSize;
-			srcRow = Bitmap_GetRow(&fontBitmap, fontY + srcY);
-
-			srcWidth = tileWidths[coords[i]];
+			srcX = (coords[i] & 0x0F) * tileSize;
+			srcY = (coords[i] >> 4) * tileSize;
+			srcRow = Bitmap_GetRow((struct Bitmap*)glyphBmps[i], fontY + srcY);
+			srcWidth = glyphWidths[i][coords[i]];
 			dstWidth = dstWidths[i];
-			color    = colors[i];
-
+			color = colors[i];
 			for (xx = 0; xx < dstWidth; xx++) {
-				fontX = srcX + xx * srcWidth / dstWidth;
-				src   = srcRow[fontX];
+				fontX = srcX + xx * srcWidth / max(1, dstWidth);
+				src = srcRow[fontX];
 				if (!BitmapCol_A(src)) continue;
-
 				dstX = x + xx;
 				if ((unsigned)dstX >= (unsigned)bmp->width) continue;
-
-				/* TODO: Transparent text by multiplying by col.A */
-				/* TODO: Not shift when multiplying */
-				/* TODO: avoid BitmapCol_A shift */
 				dstRow[dstX] = BitmapCol_Make(
 					BitmapCol_R(src) * BitmapCol_R(color) / 255,
 					BitmapCol_G(src) * BitmapCol_G(color) / 255,
@@ -530,20 +679,13 @@ static void DrawBitmappedTextCore(struct Bitmap* bmp, struct DrawTextArgs* args,
 		}
 		x = begX;
 	}
-
 	if (!(args->font->flags & FONT_FLAGS_UNDERLINE)) return;
-	/* scale up bottom row of a cell to drawn text font */
 	cellY = (8 - 1) * dstHeight / 8;
-	underlineY      = y + cellY;
+	underlineY = y + cellY;
 	underlineHeight = dstHeight - cellY;
-
 	for (i = 0; i < count; ) {
-		dstWidth = 0;
-		color    = colors[i];
-
-		for (; i < count && color == colors[i]; i++) {
-			dstWidth += dstWidths[i] + xPadding;
-		}
+		dstWidth = 0; color = colors[i];
+		for (; i < count && color == colors[i]; i++) dstWidth += dstWidths[i] + xPadding;
 		Drawer2D_Fill(bmp, x, underlineY, dstWidth, underlineHeight, color);
 		x += dstWidth;
 	}
@@ -565,30 +707,30 @@ static void DrawBitmappedText(struct Bitmap* bmp, struct DrawTextArgs* args, int
 }
 
 static int MeasureBitmappedWidth(const struct DrawTextArgs* args) {
-	int i, point = args->font->size;
-	int xPadding, width;
-	cc_string text;
-
+	int i, point = args->font->size, xPadding, width = 0, len;
+	cc_string text = args->text;
+	cc_codepoint cp;
 	if (!fontBitmap.scan0) return FallbackFont_TextWidth(args);
-
-	/* adjust coords to make drawn text match GDI fonts */
 	xPadding = Drawer2D_XPadding(point);
-	width    = 0;
-
-	text = args->text;
-	for (i = 0; i < text.length; i++) {
+	for (i = 0; i < text.length; ) {
 		char c = text.buffer[i];
-		if (c == '&' && Drawer2D_ValidColorCodeAt(&text, i + 1)) {
-			i++; continue; /* skip over the color code */
+		if (c == '&' && Drawer2D_ValidColorCodeAt(&text, i + 1)) { i += 2; continue; }
+		cp = String_GetCodepoint(&text, i, &len);
+		if (!len) break;
+		if (len == 1) width += Drawer2D_Width(point, c);
+		else {
+			struct UnicodeFontPage* page = UnicodePage_ForCodepoint(cp);
+			char cp437;
+			int glyph = page ? (int)(cp & 0xFF) :
+				(Convert_TryCodepointToCP437(cp, &cp437) ? (cc_uint8)cp437 : '?');
+			width += UnicodeGlyph_Width(point, page ? page->widths : tileWidths, glyph);
 		}
-		width += Drawer2D_Width(point, c) + xPadding;
+		width += xPadding;
+		i += len;
 	}
 	if (!width) return 0;
-
-	/* Remove padding at end */
 	if (!(args->font->flags & FONT_FLAGS_PADDING)) width -= xPadding;
-
-	if (args->useShadow) { width += Drawer2D_ShadowOffset(point); }
+	if (args->useShadow) width += Drawer2D_ShadowOffset(point);
 	return width;
 }
 
@@ -624,31 +766,41 @@ void Drawer2D_DrawClippedText(struct Context2D* ctx, struct DrawTextArgs* args,
 								int x, int y, int maxWidth) {
 	char strBuffer[512];
 	struct DrawTextArgs part;
-	int i, width;
+	int end, start, width, copyLen;
 
 	width = Drawer2D_TextWidth(args);
-	/* No clipping needed */
 	if (width <= maxWidth) { Context2D_DrawText(ctx, args, x, y); return; }
 	part = *args;
-
 	String_InitArray(part.text, strBuffer);
-	String_Copy(&part.text, &args->text);
-	String_Append(&part.text, '.');
-	
-	for (i = part.text.length - 2; i > 0; i--) {
-		part.text.buffer[i] = '.';
-		/* skip over trailing spaces */
-		if (part.text.buffer[i - 1] == ' ') continue;
+	copyLen = min(args->text.length, part.text.capacity - 2);
+	copyLen = String_SplitPoint(&args->text, copyLen);
+	{
+		cc_string prefix = String_UNSAFE_Substring(&args->text, 0, copyLen);
+		String_AppendString(&part.text, &prefix);
+	}
 
-		part.text.length = i + 2;
-		width            = Drawer2D_TextWidth(&part);
+	for (end = part.text.length; end > 0; ) {
+		/* Avoid leaving trailing spaces before the ellipsis. */
+		while (end > 0 && part.text.buffer[end - 1] == ' ') end--;
+		if (!end) break;
+
+		start = end - String_CharLengthBefore(&part.text, end);
+		/* Do not leave a dangling colour code. */
+		if (start > 0 && part.text.buffer[start - 1] == '&'
+			&& Drawer2D_ValidColorCodeAt(&part.text, start)) start--;
+
+		part.text.length = start;
+		String_Append(&part.text, '.');
+		String_Append(&part.text, '.');
+		width = Drawer2D_TextWidth(&part);
 		if (width <= maxWidth) { Context2D_DrawText(ctx, &part, x, y); return; }
 
-		/* If down to <= 2 chars, try omitting the .. */
-		if (i > 2) continue;
-		part.text.length = i;
-		width            = Drawer2D_TextWidth(&part);
-		if (width <= maxWidth) { Context2D_DrawText(ctx, &part, x, y); return; }
+		if (start <= 2) {
+			part.text.length = start;
+			width = Drawer2D_TextWidth(&part);
+			if (width <= maxWidth) { Context2D_DrawText(ctx, &part, x, y); return; }
+		}
+		end = start;
 	}
 }
 
@@ -709,13 +861,19 @@ static void OnReset(void) {
 
 static void OnInit(void) {
 	OnReset();
+	UnicodePages_Reset(NULL);
+	Event_Register_(&TextureEvents.FileChanged, NULL, UnicodePage_Process);
+	Event_Register_(&TextureEvents.PackChanged, NULL, UnicodePages_Reset);
 	TextureEntry_Register(&default_entry);
 
 	Drawer2D.BitmappedText    = Game_ClassicMode || !Options_GetBool(OPT_USE_CHAT_FONT, false);
 	Drawer2D.BlackTextShadows = Options_GetBool(OPT_BLACK_TEXT, false);
 }
 
-static void OnFree(void) { 
+static void OnFree(void) {
+	Event_Unregister_(&TextureEvents.FileChanged, NULL, UnicodePage_Process);
+	Event_Unregister_(&TextureEvents.PackChanged, NULL, UnicodePages_Reset);
+	UnicodePages_Reset(NULL);
 	FreeFontBitmap();
 	fontBitmap.scan0 = NULL;
 }

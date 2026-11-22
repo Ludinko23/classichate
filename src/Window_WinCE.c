@@ -88,6 +88,8 @@ static const cc_uint8 key_map[] = {
 /* D8 */ 0, 0, 0, CCKEY_LBRACKET, CCKEY_BACKSLASH, CCKEY_RBRACKET, CCKEY_QUOTE, 0,
 };
 
+static cc_unichar win_highSurrogate;
+
 static int MapNativeKey(WPARAM vk_key, LPARAM meta) {
 	LPARAM ext      = meta & (1UL << 24);
 	LPARAM scancode = (meta >> 16) & 0xFF;
@@ -141,6 +143,12 @@ static void GrabCursor(void) {
 }
 
 static LRESULT CALLBACK Window_Procedure(HWND handle, UINT message, WPARAM wParam, LPARAM lParam) {
+
+if (message == WM_CHAR && wParam == '~') {
+    Window_EnterFullscreen();
+    return 0;
+}
+
 	float wheelDelta;
 	cc_bool sized;
 	HWND hwnd;
@@ -176,11 +184,22 @@ static LRESULT CALLBACK Window_Procedure(HWND handle, UINT message, WPARAM wPara
 	case WM_MOVE:
 		RefreshWindowPosition();
 		break;
-
-	case WM_CHAR:
-		/* TODO: Use WM_UNICHAR instead, as WM_CHAR is just utf16 */
-		Event_RaiseInt(&InputEvents.Press, (cc_unichar)wParam);
+	case WM_CHAR: {
+		cc_unichar unit = (cc_unichar)wParam;
+		if (unit >= 0xD800 && unit <= 0xDBFF) {
+			win_highSurrogate = unit;
+		} else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+			if (win_highSurrogate) {
+				cc_codepoint cp = 0x10000 + ((win_highSurrogate - 0xD800) << 10) + (unit - 0xDC00);
+				win_highSurrogate = 0;
+				Event_RaiseInt(&InputEvents.Press, cp);
+			}
+		} else {
+			win_highSurrogate = 0;
+			Event_RaiseInt(&InputEvents.Press, unit);
+		}
 		break;
+	}
 
 #ifndef CC_BUILD_TOUCH
 	case WM_MOUSEMOVE:
@@ -301,8 +320,8 @@ void Window_Init(void) {
 	DisplayInfo.Width  = GetSystemMetrics(SM_CXSCREEN);
 	DisplayInfo.Height = GetSystemMetrics(SM_CYSCREEN);
 	DisplayInfo.Depth  = GetDeviceCaps(hdc, BITSPIXEL);
-	DisplayInfo.ScaleX = GetDeviceCaps(hdc, LOGPIXELSX) / 96.0f;
-	DisplayInfo.ScaleY = GetDeviceCaps(hdc, LOGPIXELSY) / 96.0f;
+	DisplayInfo.ScaleX = GetDeviceCaps(hdc, LOGPIXELSX) / 150.0f;
+	DisplayInfo.ScaleY = GetDeviceCaps(hdc, LOGPIXELSY) / 150.0f;
 	ReleaseDC(NULL, hdc);
 
 	/* https://docs.microsoft.com/en-us/windows/win32/opengl/reading-color-values-from-the-framebuffer */
@@ -494,21 +513,41 @@ static void ToggleFullscreen(HWND hwnd, cc_bool fullscreen, UINT finalShow) {
 	Event_RaiseVoid(&WindowEvents.Resized);
 }
 
-static UINT win_show;
+static UINT win_show = SW_SHOWNORMAL;
+
 cc_result Window_EnterFullscreen(void) {
 	HWND hwnd = Window_Main.Handle.ptr;
-	WINDOWPLACEMENT w = { 0 };
-	w.length = sizeof(WINDOWPLACEMENT);
+	DWORD style;
+	int width, height;
 
-	win_show = w.showCmd;
-	ToggleFullscreen(hwnd, true, SW_MAXIMIZE);
+	width  = GetSystemMetrics(SM_CXSCREEN);
+	height = GetSystemMetrics(SM_CYSCREEN);
+
+	style = WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+
+	suppress_resize = true;
+
+	SetWindowLong(hwnd, GWL_STYLE, style);
+
+	SetWindowPos(hwnd, NULL,
+		0, 0, width, height,
+		SWP_NOZORDER | SWP_FRAMECHANGED);
+
+	ShowWindow(hwnd, SW_SHOW);
+
+	suppress_resize = false;
+
+	RefreshWindowDimensions();
+	Event_RaiseVoid(&WindowEvents.Resized);
+
 	return 0;
 }
 
 cc_result Window_ExitFullscreen(void) {
-	HWND hwnd = Window_Main.Handle.ptr;
-	ToggleFullscreen(hwnd, false, win_show);
-	return 0;
+    HWND hwnd = Window_Main.Handle.ptr;
+
+    ToggleFullscreen(hwnd, false, win_show);
+    return 0;
 }
 
 int Window_IsObscured(void) { return 0; }

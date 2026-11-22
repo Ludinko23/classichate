@@ -26,8 +26,8 @@
 #include "Errors.h"
 #include "Options.h"
 
-static char nameBuffer[STRING_SIZE];
-static char motdBuffer[STRING_SIZE];
+static char nameBuffer[STRING_SIZE * 4];
+static char motdBuffer[STRING_SIZE * 4];
 static char appBuffer[STRING_SIZE];
 static int ticks;
 struct _ServerConnectionData Server;
@@ -41,6 +41,7 @@ static void Server_ResetState(void) {
 	Server.SupportsPlayerClick     = false;
 	Server.SupportsPartialMessages = false;
 	Server.SupportsFullCP437       = false;
+	Server.SupportsUnicodeText     = false;
 	Server.SupportsNotifyAction    = false;
 }
 
@@ -156,7 +157,7 @@ static void SPConnection_BeginConnect(void) {
 
 static char sp_lastCol;
 static void SPConnection_AddPart(const cc_string* text) {
-	cc_string tmp; char tmpBuffer[STRING_SIZE * 2];
+	cc_string tmp; char tmpBuffer[STRING_SIZE * 4 + 8];
 	char col;
 	int i;
 	String_InitArray(tmp, tmpBuffer);
@@ -179,17 +180,26 @@ static void SPConnection_AddPart(const cc_string* text) {
 	Chat_Add(&tmp);
 }
 
+static int SPConnection_ChatSplitPoint(const cc_string* text) {
+	int i = 0, chars = 0;
+	while (i < text->length && chars < STRING_SIZE) {
+		i += String_CharLength(text, i);
+		chars++;
+	}
+	return i;
+}
+
 static void SPConnection_SendChat(const cc_string* text) {
 	cc_string left, part;
+	int split;
 	if (!text->length) return;
 
 	sp_lastCol = '\0';
 	left = *text;
-
-	while (left.length > STRING_SIZE) {
-		part = String_UNSAFE_Substring(&left, 0, STRING_SIZE);
+	while ((split = SPConnection_ChatSplitPoint(&left)) < left.length) {
+		part = String_UNSAFE_Substring(&left, 0, split);
 		SPConnection_AddPart(&part);
-		left = String_UNSAFE_SubstringAt(&left, STRING_SIZE);
+		left = String_UNSAFE_SubstringAt(&left, split);
 	}
 	SPConnection_AddPart(&left);
 }
@@ -346,14 +356,35 @@ static void MPConnection_SendBlock(int x, int y, int z, BlockID old, BlockID now
 	}
 }
 
+static int MPConnection_ChatSplitPoint(const cc_string* text) {
+	int index = 0, start, bytes = 0, len, chars = 0;
+	cc_uint8 encoded[4];
+	if (!Server.SupportsUnicodeText) {
+		while (index < text->length && chars < STRING_SIZE) {
+			index += String_CharLength(text, index);
+			chars++;
+		}
+		return index;
+	}
+	while (index < text->length) {
+		start = index;
+		len = String_CharToUtf8(text, &index, encoded);
+		if (bytes + len > STRING_SIZE) return start;
+		bytes += len;
+	}
+	return text->length;
+}
+
 static void MPConnection_SendChat(const cc_string* text) {
-	cc_string left;
+	cc_string left, part;
+	int split;
 	if (!text->length || net_connecting) return;
 	left = *text;
-
-	while (left.length > STRING_SIZE) {
-		Classic_SendChat(&left, true);
-		left = String_UNSAFE_SubstringAt(&left, STRING_SIZE);
+	while ((split = MPConnection_ChatSplitPoint(&left)) < left.length) {
+		if (split <= 0) break;
+		part = String_UNSAFE_Substring(&left, 0, split);
+		Classic_SendChat(&part, true);
+		left = String_UNSAFE_SubstringAt(&left, split);
 	}
 	Classic_SendChat(&left, false);
 }

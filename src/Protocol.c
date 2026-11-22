@@ -74,6 +74,7 @@ static struct CpeExt
 	hackControl_Ext     = { "HackControl", 1 },
 	playerClick_Ext     = { "PlayerClick", 1 },
 	fullCP437_Ext       = { "FullCP437", 1 },
+	unicodeText_Ext     = { "UnicodeText", 1 },
 	longerMessages_Ext  = { "LongerMessages", 1 },
 	blockDefs_Ext       = { "BlockDefinitions", 1 },
 	blockDefsExt_Ext    = { "BlockDefinitionsExt", 2 },
@@ -103,7 +104,7 @@ static struct CpeExt
 static struct CpeExt* cpe_clientExtensions[] = {
 	&clickDist_Ext, &customBlocks_Ext, &heldBlock_Ext, &emoteFix_Ext, &textHotKey_Ext, &extPlayerList_Ext,
 	&envColors_Ext, &selectionCuboid_Ext, &blockPerms_Ext, &changeModel_Ext, &mapAppearance_Ext, &weatherType_Ext,
-	&messageTypes_Ext, &hackControl_Ext, &playerClick_Ext, &fullCP437_Ext, &longerMessages_Ext, &blockDefs_Ext,
+	&messageTypes_Ext, &hackControl_Ext, &playerClick_Ext, &fullCP437_Ext, &unicodeText_Ext, &longerMessages_Ext, &blockDefs_Ext,
 	&blockDefsExt_Ext, &bulkBlockUpdate_Ext, &textColors_Ext, &envMapAspect_Ext, &entityProperty_Ext, &extEntityPos_Ext,
 	&twoWayPing_Ext, &invOrder_Ext, &instantMOTD_Ext, &fastMap_Ext, &setHotbar_Ext, &setSpawnpoint_Ext, &velControl_Ext,
 	&customParticles_Ext, &pluginMessages_Ext, &extTeleport_Ext, &lightingMode_Ext, &cinematicGui_Ext, &notifyAction_Ext,
@@ -145,12 +146,19 @@ if (IsSupported(extBlocks_Ext)) {\
 
 static cc_string UNSAFE_GetString(cc_uint8* data) {
 	int i, length = 0;
+	cc_string value;
+	static char buffers[16][STRING_SIZE * 4];
+	static int bufferIndex;
+	char* buffer = buffers[(bufferIndex++) & 15];
 	for (i = STRING_SIZE - 1; i >= 0; i--) {
 		char code = data[i];
 		if (code == '\0' || code == ' ') continue;
 		length = i + 1; break;
 	}
-	return String_Init((char*)data, length, STRING_SIZE);
+	value = String_Init(buffer, 0, STRING_SIZE * 4);
+	if (IsSupported(unicodeText_Ext)) String_AppendUtf8(&value, data, length);
+	else String_AppendCP437(&value, data, length);
+	return value;
 }
 
 static float GetFloat(cc_uint8* data) {
@@ -167,20 +175,52 @@ static void ReadString(cc_uint8** ptr, cc_string* str) {
 		if (code == '\0' || code == ' ') continue;
 		length = i + 1; break;
 	}
-
-	String_AppendAll(str, data, length);
+	if (IsSupported(unicodeText_Ext)) String_AppendUtf8(str, data, length);
+	else String_AppendCP437(str, data, length);
 	*ptr = data + STRING_SIZE;
 }
 
 static void WriteString(cc_uint8* data, const cc_string* value) {
-	int i, count = min(value->length, STRING_SIZE);
-	for (i = 0; i < count; i++) {
-		char c = value->buffer[i];
-		if (c == '&') c = '%'; /* escape color codes */
-		data[i] = c;
-	}
+	int i = 0, count = 0, len;
+	cc_uint8 encoded[4];
+	cc_codepoint cp;
+	char cp437;
 
-	for (; i < STRING_SIZE; i++) { data[i] = ' '; }
+	if (!IsSupported(unicodeText_Ext)) {
+		if (!String_HasUnicode(value)) {
+			for (i = 0; i < value->length && i < STRING_SIZE; i++) {
+				char c = value->buffer[i];
+				data[i] = c == '&' ? '%' : c;
+			}
+			count = min(i, STRING_SIZE);
+		} else {
+			while (i < value->length && count < STRING_SIZE) {
+				cp = String_GetCodepoint(value, i, &len);
+				if (!len) break;
+				if (len == 1) cp437 = value->buffer[i];
+				else if (Server.SupportsFullCP437 && Convert_TryCodepointToCP437(cp, &cp437)) { }
+				else cp437 = '?';
+				data[count++] = cp437 == '&' ? '%' : cp437;
+				i += len;
+			}
+		}
+	} else {
+		while (i < value->length) {
+			cp = String_GetCodepoint(value, i, &len);
+			if (!len) break;
+			if (cp == '&') {
+				encoded[0] = '%';
+				len = 1;
+				i++;
+			} else {
+				len = String_CharToUtf8(value, &i, encoded);
+			}
+			if (count + len > STRING_SIZE) break;
+			Mem_Copy(data + count, encoded, len);
+			count += len;
+		}
+	}
+	for (; count < STRING_SIZE; count++) data[count] = ' ';
 }
 
 static void RemoveEndPlus(cc_string* value) {
@@ -191,7 +231,7 @@ static void RemoveEndPlus(cc_string* value) {
 }
 
 static void CheckName(EntityID id, cc_string* name, cc_string* skin) {
-	cc_string colorlessName; char colorlessBuffer[STRING_SIZE];
+	cc_string colorlessName; char colorlessBuffer[STRING_SIZE * 4];
 
 	RemoveEndPlus(name);
 	/* Server is only allowed to change our own name colours. */
@@ -669,8 +709,8 @@ static void Classic_SetBlock(cc_uint8* data) {
 
 static void Classic_AddEntity(cc_uint8* data) {
 	static const cc_string group = String_FromConst("Players");
-	cc_string name; char nameBuffer[STRING_SIZE];
-	cc_string skin; char skinBuffer[STRING_SIZE];
+	cc_string name; char nameBuffer[STRING_SIZE * 4];
+	cc_string skin; char skinBuffer[STRING_SIZE * 4];
 	EntityID id;
 	String_InitArray(name, nameBuffer);
 	String_InitArray(skin, skinBuffer);
@@ -733,7 +773,7 @@ static void Classic_RemoveEntity(cc_uint8* data) {
 static void Classic_Message(cc_uint8* data) {
 	static const cc_string detailMsg  = String_FromConst("^detail.user=");
 	static const cc_string detailUser = String_FromConst("^detail.user");
-	cc_string text; char textBuffer[STRING_SIZE + 2];
+	cc_string text; char textBuffer[STRING_SIZE * 4 + 2];
 
 	cc_uint8 type = *data++;
 	String_InitArray(text, textBuffer);
@@ -1033,6 +1073,8 @@ static void CPE_ExtEntry(cc_uint8* data) {
 		Server.SupportsPartialMessages = true;
 	} else if (ext == &fullCP437_Ext) {
 		Server.SupportsFullCP437 = true;
+	} else if (ext == &unicodeText_Ext) {
+		Server.SupportsUnicodeText = true;
 	} else if (ext == &blockDefsExt_Ext) {
 		if (ext->serverVersion == 1) return;
 		Protocol.Sizes[OPCODE_DEFINE_BLOCK_EXT] += 3;

@@ -11,12 +11,12 @@
 #include "Options.h"
 #include "Drawer2D.h"
  
-static char status[5][STRING_SIZE];
-static char bottom[3][STRING_SIZE];
-static char client[2][STRING_SIZE];
-static char announcement[STRING_SIZE];
-static char bigAnnouncement[STRING_SIZE];
-static char smallAnnouncement[STRING_SIZE];
+static char status[5][STRING_SIZE * 4];
+static char bottom[3][STRING_SIZE * 4];
+static char client[2][STRING_SIZE * 4];
+static char announcement[STRING_SIZE * 4];
+static char bigAnnouncement[STRING_SIZE * 4];
+static char smallAnnouncement[STRING_SIZE * 4];
 
 cc_string Chat_Status[5]       = { String_FromArray(status[0]), String_FromArray(status[1]), String_FromArray(status[2]),
                                                                 String_FromArray(status[3]), String_FromArray(status[4]) };
@@ -44,7 +44,7 @@ static void ClearChatLogs(void) {
 	StringsBuffer_Clear(&Chat_Log);
 }
 
-static char      logNameBuffer[STRING_SIZE];
+static char      logNameBuffer[STRING_SIZE * 4];
 static cc_string logName = String_FromArray(logNameBuffer);
 static char      logPathBuffer[FILENAME_SIZE];
 static cc_string logPath = String_FromArray(logPathBuffer);
@@ -192,7 +192,7 @@ void Chat_Add3(const char* format, const void* a1, const void* a2, const void* a
 	Chat_Add4(format, a1, a2, a3, NULL);
 }
 void Chat_Add4(const char* format, const void* a1, const void* a2, const void* a3, const void* a4) {
-	cc_string msg; char msgBuffer[STRING_SIZE * 2];
+	cc_string msg; char msgBuffer[STRING_SIZE * 8];
 	String_InitArray(msg, msgBuffer);
 
 	String_Format4(&msg, format, a1, a2, a3, a4);
@@ -219,7 +219,7 @@ void Chat_AddOf(const cc_string* text, int msgType) {
 
 		/* StringsBuffer_Add will abort game if try to add string > 511 characters */
 		str        = *text; 
-		str.length = min(str.length, DRAWER2D_MAX_TEXT_LENGTH);
+		str.length = String_SplitPoint(&str, DRAWER2D_MAX_TEXT_LENGTH);
 
 		Chat_GetLogTime(Chat_Log.count) = Game.Time;
 		AppendChatLog(&str);

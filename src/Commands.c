@@ -246,7 +246,7 @@ static void ModelCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand ModelCommand = {
 	"Model", ModelCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY | COMMAND_FLAG_UNSPLIT_ARGS,
+	COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client model [name]",
 		"&bnames: &echibi, chicken, creeper, human, pig, sheep",
@@ -264,7 +264,7 @@ static void SkinCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand SkinCommand = {
 	"Skin", SkinCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY | COMMAND_FLAG_UNSPLIT_ARGS,
+	COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client skin [name]",
 		"&eChanges to the skin to the given player",
@@ -353,7 +353,7 @@ static void PlaceCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand PlaceCommand = {
 	"Place", PlaceCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	0,
 	{
 		"&a/client place [block] [x y z]",
 		"&ePlaces block at [x y z].",
@@ -497,7 +497,7 @@ static void CuboidCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand CuboidCommand = {
 	"Cuboid", CuboidCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY | COMMAND_FLAG_UNSPLIT_ARGS,
+	COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client cuboid [block] [persist]",
 		"&eFills the 3D rectangle between two points with [block].",
@@ -562,7 +562,7 @@ static void ReplaceCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand ReplaceCommand = {
 	"Replace", ReplaceCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY | COMMAND_FLAG_UNSPLIT_ARGS,
+	COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client replace [source] [replacement] [persist]",
 		"&eReplaces all [source] blocks between two points with [replacement].",
@@ -597,7 +597,7 @@ static void TeleportCommand_Execute(const cc_string* args, int argsCount) {
 
 static struct ChatCommand TeleportCommand = {
 	"TP", TeleportCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	0,
 	{
 		"&a/client tp [x y z]",
 		"&eMoves you to the given coordinates.",
@@ -783,7 +783,7 @@ static void BlockEditCommand_Execute(const cc_string* args, int argsCount__) {
 
 static struct ChatCommand BlockEditCommand = {
 	"BlockEdit", BlockEditCommand_Execute,
-	COMMAND_FLAG_SINGLEPLAYER_ONLY | COMMAND_FLAG_UNSPLIT_ARGS,
+	COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client blockedit [block] [property] [value]",
 		"&eEdits the given property of the given block",

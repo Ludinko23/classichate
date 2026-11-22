@@ -813,30 +813,41 @@ int SysFont_TextWidth(struct DrawTextArgs* args) {
 	struct SysFont* font = (struct SysFont*)args->font->handle;
 	FT_Face face   = font->face;
 	cc_string text = args->text;
-	int i, width = 0, charWidth;
+	int i, len, width = 0, charWidth, idx;
 	FT_Error res;
-	cc_unichar uc;
+	cc_codepoint cp;
+	char cp437;
 
-	for (i = 0; i < text.length; i++) {
+	/* Text is stored as single bytes (ASCII/CP437) or 4 byte unicode escapes (see String_AppendCodepoint), */
+	/*  so it must be walked one character at a time - not one byte at a time */
+	for (i = 0; i < text.length; i += len) {
 		char c = text.buffer[i];
+		len = 1;
 		if (c == '&' && Drawer2D_ValidColorCodeAt(&text, i + 1)) {
-			i++; continue; /* skip over the color code */
+			len = 2; continue; /* skip over the color code */
 		}
 
-		charWidth = font->widths[(cc_uint8)c];
+		cp = String_GetCodepoint(&text, i, &len);
+		if (!len) break;
+
+		/* Widths are cached per CP437 byte, anything else is measured every time */
+		idx = -1;
+		if (len == 1)                                  idx = (cc_uint8)c;
+		else if (Convert_TryCodepointToCP437(cp, &cp437)) idx = (cc_uint8)cp437;
+
+		charWidth = idx >= 0 ? font->widths[idx] : UInt16_MaxValue;
 		/* need to calculate glyph width */
 		if (charWidth == UInt16_MaxValue) {
-			uc  = Convert_CP437ToUnicode(c);
-			res = FT_Load_Char(face, uc, 0);
+			res = FT_Load_Char(face, cp, 0);
 
 			if (res) {
-				Platform_Log2("Error %e measuring width of %r", &res, &c);
+				Platform_Log2("Error %e measuring width of %i", &res, &cp);
 				charWidth = 0;
 			} else {
-				charWidth = face->glyph->advance.x;		
+				charWidth = face->glyph->advance.x;
 			}
 
-			font->widths[(cc_uint8)c] = charWidth;
+			if (idx >= 0) font->widths[idx] = charWidth;
 		}
 		width += charWidth;
 	}
@@ -913,9 +924,11 @@ void SysFont_DrawText(struct DrawTextArgs* args, struct Bitmap* bmp, int x, int 
 	/* glyph state */
 	FT_BitmapGlyph glyph;
 	FT_Bitmap* img;
-	int i, offset;
+	int i, len, offset, idx;
+	cc_bool temporary;
 	FT_Error res;
-	cc_unichar uc;
+	cc_codepoint cp;
+	char cp437;
 
 	if (shadow) {
 		glyphs = font->shadow_glyphs;
@@ -928,28 +941,37 @@ void SysFont_DrawText(struct DrawTextArgs* args, struct Bitmap* bmp, int x, int 
 	color = Drawer2D.Colors['f'];
 	if (shadow) color = GetShadowColor(color);
 
-	for (i = 0; i < text.length; i++) {
+	for (i = 0; i < text.length; i += len) {
 		char c = text.buffer[i];
+		len = 1;
 		if (c == '&' && Drawer2D_ValidColorCodeAt(&text, i + 1)) {
 			color = Drawer2D_GetColor(text.buffer[i + 1]);
 
 			if (shadow) color = GetShadowColor(color);
-			i++; continue; /* skip over the color code */
+			len = 2; continue; /* skip over the color code */
 		}
 
-		glyph = glyphs[(cc_uint8)c];
+		cp = String_GetCodepoint(&text, i, &len);
+		if (!len) break;
+
+		/* Glyphs are cached per CP437 byte, anything else is rendered every time */
+		idx = -1;
+		if (len == 1)                                  idx = (cc_uint8)c;
+		else if (Convert_TryCodepointToCP437(cp, &cp437)) idx = (cc_uint8)cp437;
+
+		temporary = false;
+		glyph     = idx >= 0 ? glyphs[idx] : NULL;
 		if (!glyph) {
-			uc  = Convert_CP437ToUnicode(c);
-			res = FT_Load_Char(face, uc, FT_LOAD_RENDER);
+			res = FT_Load_Char(face, cp, FT_LOAD_RENDER);
 
 			if (res) {
-				Platform_Log2("Error %e drawing %r", &res, &text.buffer[i]);
+				Platform_Log2("Error %e drawing %i", &res, &cp);
 				continue;
 			}
 
 			/* due to FT_LOAD_RENDER, glyph is always a bitmap one */
 			FT_Get_Glyph(face->glyph, (FT_Glyph*)&glyph); /* TODO: Check error */
-			glyphs[(cc_uint8)c] = glyph;
+			if (idx >= 0) { glyphs[idx] = glyph; } else { temporary = true; }
 		}
 
 		offset = (height + descender) - glyph->top;
@@ -964,6 +986,7 @@ void SysFont_DrawText(struct DrawTextArgs* args, struct Bitmap* bmp, int x, int 
 
 		x += TEXT_CEIL(glyph->root.advance.x >> 10);
 		x -= glyph->left; y -= offset;
+		if (temporary) FT_Done_Glyph((FT_Glyph)glyph);
 	}
 
 	if (args->font->flags & FONT_FLAGS_UNDERLINE) {

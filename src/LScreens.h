@@ -43,7 +43,9 @@ void LScreen_AddWidget(void* screen, void* widget);
 	
 void ChooseModeScreen_SetActive(cc_bool firstTime);
 void ColoursScreen_SetActive(void);
+void LScreen_Reset(struct LScreen* s);
 void DirectConnectScreen_SetActive(void);
+void DirectConnectScreen_SetActiveWithValues(const cc_string* username, const cc_string* server);
 void MFAScreen_SetActive(void);
 void MainScreen_SetActive(void);
 void CheckResourcesScreen_SetActive(void);
@@ -52,6 +54,21 @@ void ServersScreen_SetActive(void);
 void SettingsScreen_SetActive(void);
 void ThemesScreen_SetActive(void);
 void UpdatesScreen_SetActive(void);
+/* CCPS additions */
+void OptionsScreen_SetActive(void);
+void GeneralScreen_SetActive(void);
+void CCPSServersScreen_SetActive(void);
+void ManageServersScreen_SetActive(void);
+void SwitchServerScreen_SetActive(void);
+void AddEditServerScreen_SetActive(int editIndex);
+
+/* Friends system */
+void FriendsHubScreen_SetActive(void);
+void FriendsListScreen_SetActive(void);
+void FriendManageScreen_SetActive(const cc_string* target);
+void AddFriendScreen_SetActive(void);
+void FriendRequestsScreen_SetActive(void);
+void FriendRequestManageScreen_SetActive(const cc_string* from);
 
 CC_END_HEADER
 #endif

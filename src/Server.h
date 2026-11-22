@@ -60,6 +60,8 @@ CC_VAR extern struct _ServerConnectionData {
 	cc_bool SupportsPartialMessages;
 	/* Whether the server supports all of code page 437, not just ASCII */
 	cc_bool SupportsFullCP437;
+	/* Whether the server negotiated the custom UnicodeText UTF-8 string extension */
+	cc_bool SupportsUnicodeText;
 
 	/* Address of the server if multiplayer, empty string if singleplayer */
 	cc_string Address;

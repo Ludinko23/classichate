@@ -123,6 +123,8 @@ static void LoadOptions(void) {
 	Gui.ClassicMenu      = Options_GetBool(OPT_CLASSIC_OPTIONS,   false) || Game_ClassicMode;
 	Gui.ClassicChat      = Options_GetBool(OPT_CLASSIC_CHAT,      false) || Game_PureClassic;
 	Gui.ClassicInventory = Options_GetBool(OPT_CLASSIC_INVENTORY, false) || Game_ClassicMode;
+	Gui.TransparentInventory = Options_GetBool(OPT_TRANSPARENT_INVENTORY, false);
+	Gui.RainbowInventory     = Options_GetBool(OPT_RAINBOW_INVENTORY,     false);
 	Gui.ShowFPS          = Options_GetBool(OPT_SHOW_FPS, true);
 	
 	Gui.RawInventoryScale = Options_GetFloat(OPT_INVENTORY_SCALE, 0.25f, 5.0f, 1.0f);
@@ -693,12 +695,16 @@ static void OnFontChanged(void* obj) { Gui_RefreshAll(); }
 
 static void OnKeyPress(void* obj, int cp) {
 	struct Screen* s;
-	int i; 
+	int i;
 	char c;
+	if (cp > 0x7F) {
+		for (i = 0; i < Gui.ScreensCount; i++) {
+			s = Gui_Screens[i];
+			if (s->VTABLE->HandlesUnicodeKeyPress && s->VTABLE->HandlesUnicodeKeyPress(s, cp)) return;
+		}
+	}
 	if (!Convert_TryCodepointToCP437(cp, &c)) return;
-
-	for (i = 0; i < Gui.ScreensCount; i++) 
-	{
+	for (i = 0; i < Gui.ScreensCount; i++) {
 		s = Gui_Screens[i];
 		if (s->VTABLE->HandlesKeyPress(s, c)) return;
 	}

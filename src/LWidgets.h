@@ -131,7 +131,7 @@ struct LLabel {
 	LWidget_Layout
 	cc_bool small; /* whether to use 12pt instead of 14pt font size */
 	cc_string text;
-	char _textBuffer[STRING_SIZE];
+	char _textBuffer[STRING_SIZE * 4]; /* translated text can use 4 bytes per character */
 };
 CC_NOINLINE void LLabel_Add(void* screen, struct LLabel* w, const char* text, 
 							const struct LLayout* layouts);

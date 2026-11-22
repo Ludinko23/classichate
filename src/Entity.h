@@ -131,8 +131,8 @@ struct Entity {
 	float uScale, vScale;
 
 	struct AnimatedComp Anim;
-	char SkinRaw[STRING_SIZE];
-	char NameRaw[STRING_SIZE];
+	char SkinRaw[STRING_SIZE * 4];
+	char NameRaw[STRING_SIZE * 4];
 	struct Texture NameTex;
 
 	/* Previous and next intended location of the entity */

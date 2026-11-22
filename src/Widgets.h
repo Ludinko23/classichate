@@ -29,6 +29,8 @@ CC_NOINLINE void TextWidget_Add(void* screen, struct TextWidget* w);
 /* Draws the given text into a texture, then updates the position and size of this widget. */
 CC_NOINLINE void TextWidget_Set(struct TextWidget* w, const cc_string* text, struct FontDesc* font);
 /* Shorthand for TextWidget_Set using String_FromReadonly */
+/* Same as TextWidget_Set, but never translates (for text that comes from the server/player) */
+CC_NOINLINE void TextWidget_SetRaw(struct TextWidget* w, const cc_string* text, struct FontDesc* font);
 CC_NOINLINE void TextWidget_SetConst(struct TextWidget* w, const char* text, struct FontDesc* font);
 
 /* A labelled button that can be clicked on. */
@@ -48,6 +50,8 @@ CC_NOINLINE void ButtonWidget_Add(void* screen, struct ButtonWidget* w, int minW
 /* Draws the given text into a texture, then updates the position and size of this widget. */
 CC_NOINLINE void ButtonWidget_Set(struct ButtonWidget* w, const cc_string* text, struct FontDesc* font);
 /* Shorthand for ButtonWidget_Set using String_FromReadonly */
+/* Same as ButtonWidget_Set, but never translates */
+CC_NOINLINE void ButtonWidget_SetRaw(struct ButtonWidget* w, const cc_string* text, struct FontDesc* font);
 CC_NOINLINE void ButtonWidget_SetConst(struct ButtonWidget* w, const char* text, struct FontDesc* font);
 
 /* Clickable and draggable scrollbar. */
@@ -216,7 +220,7 @@ struct TextInputWidget {
 	struct InputWidget base;
 	int minWidth, minHeight;
 	struct MenuInputDesc desc;
-	char _textBuffer[INPUTWIDGET_LEN];
+	char _textBuffer[INPUTWIDGET_LEN * 4];
 	/* variables for on-screen keyboard */
 	const char* onscreenPlaceholder;
 	int onscreenType;
@@ -234,8 +238,8 @@ struct ChatInputWidget {
 	struct InputWidget base;
 	int typingLogPos;
 	cc_string origStr;
-	char _textBuffer[INPUTWIDGET_MAX_LINES * INPUTWIDGET_LEN];
-	char _origBuffer[INPUTWIDGET_MAX_LINES * INPUTWIDGET_LEN];	
+	char _textBuffer[INPUTWIDGET_MAX_LINES * INPUTWIDGET_LEN * 4];
+	char _origBuffer[INPUTWIDGET_MAX_LINES * INPUTWIDGET_LEN * 4];	
 };
 
 CC_NOINLINE void ChatInputWidget_Create(struct ChatInputWidget* w);
@@ -244,7 +248,7 @@ CC_NOINLINE void ChatInputWidget_SetFont(struct ChatInputWidget* w, struct FontD
 
 /* Retrieves the text for the i'th line in the group */
 typedef cc_string (*TextGroupWidget_Get)(int i);
-#define TEXTGROUPWIDGET_LEN (STRING_SIZE + (STRING_SIZE / 2))
+#define TEXTGROUPWIDGET_LEN (STRING_SIZE * 4)
 
 /* A group of text labels. */
 struct TextGroupWidget {

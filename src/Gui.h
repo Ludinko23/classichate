@@ -48,6 +48,10 @@ CC_VAR extern struct _GuiData {
 	cc_bool ShowFPS;
 	/* Whether classic-style inventory is used */
 	cc_bool ClassicInventory;
+	/* Whether inventory background is transparent. */
+	cc_bool TransparentInventory;
+	/* Whether inventory background cycles through rainbow colours. */
+	cc_bool RainbowInventory;
 	float RawHotbarScale, RawChatScale, RawInventoryScale, RawCrosshairScale;
 	GfxResourceID GuiTex, GuiClassicTex, IconsTex, TouchTex;
 	int DefaultLines;
@@ -122,6 +126,8 @@ struct ScreenVTABLE {
 	void (*ContextRecreated)(void* elem);
 	/* Returns non-zero if a pad axis update is handled. */
 	int (*HandlesPadAxis)(void* elem, struct PadAxisUpdate* upd);
+	/* Handles a Unicode codepoint that cannot be represented as a legacy key byte. */
+	int (*HandlesUnicodeKeyPress)(void* elem, cc_codepoint codepoint);
 };
 #define Screen_Body const struct ScreenVTABLE* VTABLE; \
 	cc_bool grabsInput;  /* Whether this screen grabs input. Causes the cursor to become visible. */ \

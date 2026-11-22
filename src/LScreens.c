@@ -1,6 +1,8 @@
+#include "Language.h"
 #include "LScreens.h"
 #ifndef CC_DISABLE_LAUNCHER
-#include "String_.h"
+#include "CCPSServers.h"
+#include "String.h"
 #include "LWidgets.h"
 #include "LWeb.h"
 #include "Launcher.h"
@@ -20,15 +22,11 @@
 #include "Http.h"
 #include "Game.h"
 #include "main.h"
+#include "Friends.h"
+#include <time.h>
 
 #define LAYOUTS static const struct LLayout
 #define IsBackButton(btn) (btn == CCKEY_ESCAPE || btn == CCPAD_SELECT || btn == CCPAD_2)
-
-static cc_bool IsValidPort(const cc_string* str) {
-	int port;
-	return Convert_ParseInt(str, &port) && port >= 0 && port <= 65535;
-}
-
 
 /*########################################################################################################################*
 *---------------------------------------------------------Screen base-----------------------------------------------------*
@@ -53,6 +51,7 @@ static void LScreen_DoLayout(struct LScreen* s) {
 static void LScreen_Tick(struct LScreen* s) {
 	struct LWidget* w = s->selectedWidget;
 	if (w && w->VTABLE->Tick) w->VTABLE->Tick(w);
+	Friends_Tick();
 }
 
 void LScreen_SelectWidget(struct LScreen* s, int idx, struct LWidget* w, cc_bool was) {
@@ -133,7 +132,7 @@ static void LScreen_DrawBackground(struct LScreen* s, struct Context2D* ctx) {
 	LBackend_DrawTitle(ctx, s->title);
 }
 
-CC_NOINLINE static void LScreen_Reset(struct LScreen* s) {
+CC_NOINLINE void LScreen_Reset(struct LScreen* s) {
 	int i;
 
 	s->Activated   = LScreen_NullFunc;
@@ -170,13 +169,35 @@ void LScreen_AddWidget(void* screen, void* widget) {
 }
 
 
+/* Forward declarations for friends screens */
+void FriendsHubScreen_SetActive(void);
+void FriendsListScreen_SetActive(void);
+void FriendManageScreen_SetActive(const cc_string* target);
+void AddFriendScreen_SetActive(void);
+void FriendRequestsScreen_SetActive(void);
+void FriendRequestManageScreen_SetActive(const cc_string* from);
+static void FriendsListScreen_Tick(struct LScreen* s);
+static void FriendRequestsScreen_Tick(struct LScreen* s);
+
 static void SwitchToChooseMode(void* w)    { ChooseModeScreen_SetActive(false); }
 static void SwitchToColours(void* w)       { ColoursScreen_SetActive(); }
 static void SwitchToDirectConnect(void* w) { DirectConnectScreen_SetActive(); }
 static void SwitchToMain(void* w)          { MainScreen_SetActive(); }
-static void SwitchToSettings(void* w)      { SettingsScreen_SetActive(); }
+static void SwitchToFriends(void* w)              { FriendsHubScreen_SetActive(); }
+static void SwitchToFriendsListScreen(void* w)    { FriendsListScreen_SetActive(); }
+static void SwitchToAddFriendScreen(void* w)      { AddFriendScreen_SetActive(); }
+static void SwitchToFriendRequestsScreen(void* w) { FriendRequestsScreen_SetActive(); }
+
+static void SwitchToSettings(void* w)      { OptionsScreen_SetActive(); }
 static void SwitchToThemes(void* w)        { ThemesScreen_SetActive(); }
 static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
+/* CCPS screen switches */
+static void SwitchToOptions(void* w)         { OptionsScreen_SetActive(); }
+static void SwitchToGeneral(void* w)         { GeneralScreen_SetActive(); }
+static void SwitchToCCPSServers(void* w)     { CCPSServersScreen_SetActive(); }
+static void SwitchToManageServers(void* w)   { ManageServersScreen_SetActive(); }
+static void SwitchToSwitchServer(void* w)    { SwitchServerScreen_SetActive(); }
+static void SwitchToAddServer(void* w)       { AddEditServerScreen_SetActive(-1); }
 
 
 /*########################################################################################################################*
@@ -480,7 +501,14 @@ static void DirectConnectScreen_UrlFilter(cc_string* str) {
 	str->length = 0;
 }
 
+static cc_bool DirectConnectScreen_ParsePort(const cc_string* str) {
+	int port;
+	return Convert_ParseInt(str, &port) && port >= 0 && port <= 65535;
+}
+
 static void DirectConnectScreen_StartClient(void* w) {
+	cc_string savedUser, savedPass;
+	char savedUserBuffer[STRING_SIZE], savedPassBuffer[STRING_SIZE];
 	static const cc_string defMppass = String_FromConst("(none)");
 	const cc_string* user   = &DirectConnectScreen.iptUsername.text;
 	const cc_string* addr   = &DirectConnectScreen.iptAddress.text;
@@ -497,16 +525,26 @@ static void DirectConnectScreen_StartClient(void* w) {
 	}
 
 	if (!user->length) {
+		String_InitArray(savedUser, savedUserBuffer);
+		Options_Get(LOPT_USERNAME, &savedUser, "");
+		user = &savedUser;
+	}
+	if (!user->length) {
 		LLabel_SetConst(status, "&cUsername required"); return;
 	}
 	DirectUrl_ExtractAddress(addr, &ip, &port);
-	if (!IsValidPort(&port)) {
+	if (!DirectConnectScreen_ParsePort(&port)) {
 		LLabel_SetConst(status, "&cInvalid port"); return;
 	}
 	if (Socket_ParseAddress(&ip, 25565, addrs, &numAddrs)) {
 		LLabel_SetConst(status, "&cInvalid ip"); return;
 	}
-	if (!mppass->length) mppass = &defMppass;
+	if (!mppass->length) {
+		String_InitArray(savedPass, savedPassBuffer);
+		Options_GetSecure(LOPT_PASSWORD, &savedPass);
+		if (savedPass.length) mppass = &savedPass;
+		else mppass = &defMppass;
+	}
 
 	Options_PauseSaving();
 		Options_Set("launcher-dc-username", user);
@@ -523,7 +561,7 @@ static void DirectConnectScreen_Activated(struct LScreen* s_) {
 	struct DirectConnectScreen* s = (struct DirectConnectScreen*)s_;
 
 	LInput_Add(s,  &s->iptUsername, 330, "Username..",               dc_iptUsername);
-	LInput_Add(s,  &s->iptAddress,  330, "IP address:Port number..", dc_iptAddress);
+	LInput_Add(s,  &s->iptAddress,  330, "IP address:Port number or ccjoin://..", dc_iptAddress);
 	LInput_Add(s,  &s->iptMppass,   330, "Mppass..",                 dc_iptMppass);
 
 	LButton_Add(s, &s->btnConnect, 110, 35, "Connect", 
@@ -541,7 +579,8 @@ static void DirectConnectScreen_Load(struct LScreen* s_) {
 	struct DirectConnectScreen* s = (struct DirectConnectScreen*)s_;
 	cc_string addr; char addrBuffer[STRING_SIZE];
 	cc_string mppass; char mppassBuffer[STRING_SIZE];
-	cc_string user, ip, port;
+	cc_string user, savedUser, ip, port;
+	char savedUserBuffer[STRING_SIZE];
 	Options_Reload();
 
 	Options_UNSAFE_Get("launcher-dc-username", &user);
@@ -550,6 +589,16 @@ static void DirectConnectScreen_Load(struct LScreen* s_) {
 	
 	String_InitArray(mppass, mppassBuffer);
 	Options_GetSecure("launcher-dc-mppass", &mppass);
+	if (!mppass.length) {
+		Options_GetSecure(LOPT_PASSWORD, &mppass);
+	}
+
+	if (!user.length) {
+		String_InitArray(savedUser, savedUserBuffer);
+		Options_Get(LOPT_USERNAME, &savedUser, "");
+		user = savedUser;
+	}
+
 	String_InitArray(addr, addrBuffer);
 	String_Format2(&addr, "%s:%s", &ip, &port);
 
@@ -575,6 +624,18 @@ void DirectConnectScreen_SetActive(void) {
 	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
 
 	Launcher_SetScreen((struct LScreen*)s);
+}
+
+void DirectConnectScreen_SetActiveWithValues(const cc_string* username, const cc_string* server) {
+	struct DirectConnectScreen* s = &DirectConnectScreen;
+	cc_string empty;
+	char emptyBuffer[1] = { 0 };
+	LScreen_Reset((struct LScreen*)s);
+	DirectConnectScreen_SetActive();
+	String_InitArray_NT(empty, emptyBuffer);
+	if (username) LInput_SetText(&s->iptUsername, username);
+	if (server)   LInput_SetText(&s->iptAddress,  server);
+	LInput_SetText(&s->iptMppass, &empty);
 }
 
 
@@ -730,7 +791,7 @@ LAYOUTS main_lblUpdate_N[] = { { ANCHOR_MAX,   10 }, { ANCHOR_MAX, 45 } };
 LAYOUTS main_lblUpdate_H[] = { { ANCHOR_MAX,   10 }, { ANCHOR_MAX, 6 } };
 
 CC_NOINLINE static void MainScreen_Error(struct HttpRequest* req, const char* action) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	struct MainScreen* s = &MainScreen;
 	String_InitArray(str, strBuffer);
 
@@ -783,7 +844,7 @@ static void MainScreen_Singleplayer(void* w) {
 }
 
 static void MainScreen_ResumeHover(void* w) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	struct MainScreen* s = &MainScreen;
 	struct ResumeInfo info;
 	if (s->signingIn) return;
@@ -793,11 +854,11 @@ static void MainScreen_ResumeHover(void* w) {
 	String_InitArray(str, strBuffer);
 
 	if (info.server.length && String_Equals(&info.user,	&s->iptUsername.text)) {
-		String_Format1(&str, "&eResume to %s", &info.server);
+		String_Format1(&str, Lang_Get("&eResume to %s"), &info.server);
 	} else if (info.server.length) {
-		String_Format2(&str, "&eResume as %s to %s", &info.user, &info.server);
+		String_Format2(&str, Lang_Get("&eResume as %s to %s"), &info.user, &info.server);
 	} else {
-		String_Format3(&str, "&eResume as %s to %s:%s", &info.user, &info.ip, &info.port);
+		String_Format3(&str, Lang_Get("&eResume as %s to %s:%s"), &info.user, &info.ip, &info.port);
 	}
 	LLabel_SetText(&s->lblStatus, &str);
 }
@@ -861,7 +922,7 @@ static void MainScreen_Activated(struct LScreen* s_) {
 
 	LLabel_Add(s,  &s->lblStatus,  "",  main_lblStatus);
 #ifdef CC_BUILD_NETWORKING
-	LButton_Add(s, &s->btnDirect,  200, 35, "Direct connect", 
+	LButton_Add(s, &s->btnDirect,  200, 35, "Direct connect",
 				SwitchToDirectConnect,   main_btnDirect);
 #endif
 	LButton_Add(s, &s->btnSPlayer, 200, 35, "Singleplayer",
@@ -972,7 +1033,13 @@ static void MainScreen_TickSignIn(struct MainScreen* s) {
 }
 
 static void MainScreen_ServersError(struct HttpRequest* req) {
-	MainScreen_Error(req, "retrieving servers list");
+	/* Show a friendlier message when a custom private server (PS) is active */
+	if (CCPS_GetActiveBaseURL()) {
+		LLabel_SetConst(&MainScreen.lblStatus, "&cCan't Connect To The PS!");
+		MainScreen.signingIn = false;
+	} else {
+		MainScreen_Error(req, "retrieving servers list");
+	}
 }
 
 static void MainScreen_TickFetchServers(struct MainScreen* s) {
@@ -991,9 +1058,13 @@ static void MainScreen_TickFetchServers(struct MainScreen* s) {
 	}
 }
 
+static void MainScreen_UpdateTitle(void);
+
 static void MainScreen_Tick(struct LScreen* s_) {
 	struct MainScreen* s = (struct MainScreen*)s_;
 	LScreen_Tick(s_);
+
+	MainScreen_UpdateTitle();
 
 #ifdef CC_BUILD_NETWORKING
 	MainScreen_TickCheckUpdates(s);
@@ -1003,28 +1074,51 @@ static void MainScreen_Tick(struct LScreen* s_) {
 #endif
 }
 
+static void MainScreen_UpdateTitle(void) {
+	time_t now;
+	struct tm* date;
+	int mon, day;
+
+	MainScreen.title = "ClassicHATE";
+
+	now  = time(NULL);
+	date = localtime(&now);
+	if (!date) return;
+
+	mon = date->tm_mon;   /* 0 = January */
+	day = date->tm_mday;
+
+	if (mon == 0 && day == 1) {
+		MainScreen.title = "New Year, New HATE!";
+        } else if (mon == 11 && day == 31) {
+                MainScreen.title = "Almost New Years!";
+	} else if (mon == 1 && day == 14) {
+		MainScreen.title = "ClassicLOVE";
+	} else if (mon == 3 && day == 1) {
+		MainScreen.title = "ClassicLOVE";
+	} else if (mon == 9 && day == 31) {
+		MainScreen.title = "SpookyHATE";
+	} else if (mon == 11 && day == 24) {
+		MainScreen.title = "Merry HATEmas!";
+	} else if (mon == 11 && (day == 25 || day == 26)) {
+		MainScreen.title = "ChristmasHATE";
+	}
+}
+
 void MainScreen_SetActive(void) {
 	struct MainScreen* s = &MainScreen;
 	LScreen_Reset((struct LScreen*)s);
-	
+
 	s->widgets    = main_widgets;
 	s->maxWidgets = Array_Elems(main_widgets);
 
-	s->Activated     = MainScreen_Activated;
-	s->LoadState     = MainScreen_Load;
-	s->Tick          = MainScreen_Tick;
-	s->title         = "ClassicHATE";
+	s->Activated = MainScreen_Activated;
+	s->LoadState = MainScreen_Load;
+	s->Tick      = MainScreen_Tick;
 
-#ifdef CC_BUILD_NETWORKING
-	s->onEnterWidget = (struct LWidget*)&s->btnLogin;
-#else
-	s->onEnterWidget = (struct LWidget*)&s->btnSPlayer;
-#endif
-
-	Launcher_SetScreen((struct LScreen*)s);
+	MainScreen_UpdateTitle();                 /* set the title first */
+	Launcher_SetScreen((struct LScreen*)s);   /* then actually show the screen */
 }
-
-
 #ifdef CC_BUILD_RESOURCES
 /*########################################################################################################################*
 *----------------------------------------------------CheckResourcesScreen-------------------------------------------------*
@@ -1073,20 +1167,20 @@ static void CheckResourcesScreen_AddWidgets(struct CheckResourcesScreen* s) {
 
 static void CheckResourcesScreen_Activated(struct LScreen* s_) {
 	struct CheckResourcesScreen* s = (struct CheckResourcesScreen*)s_;
-	cc_string str; char buffer[STRING_SIZE];
+	cc_string str; char buffer[STRING_SIZE * 4];
 	float size;
 	CheckResourcesScreen_AddWidgets(s);
 		
 	size = Resources_MissingSize / 1024.0f;
 	String_InitArray(str, buffer);
-	String_Format1(&str, "&eDownload size: %f2 megabytes", &size);
+	String_Format1(&str, Lang_Get("&eDownload size: %f2 megabytes"), &size);
 	LLabel_SetText(&s->lblStatus, &str);
 }
 
 static void CheckResourcesScreen_ResetArea(struct Context2D* ctx, int x, int y, int width, int height) {
-	float R = BitmapCol_R(Launcher_Theme.BackgroundColor) * 0.78f; /* 153 -> 120 */
-	float G = BitmapCol_G(Launcher_Theme.BackgroundColor) * 0.70f; /* 127 ->  89 */
-	float B = BitmapCol_B(Launcher_Theme.BackgroundColor) * 0.88f; /* 172 -> 151 */
+	int R = BitmapCol_R(Launcher_Theme.BackgroundColor) * 0.78f; /* 153 -> 120 */
+	int G = BitmapCol_G(Launcher_Theme.BackgroundColor) * 0.70f; /* 127 ->  89 */
+	int B = BitmapCol_B(Launcher_Theme.BackgroundColor) * 0.88f; /* 172 -> 151 */
 
 	Gradient_Noise(ctx, BitmapColor_RGB(R, G, B), 4, x, y, width, height);
 }
@@ -1138,7 +1232,7 @@ LAYOUTS fres_sdrProgress[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  15 } };
 
 
 static void FetchResourcesScreen_Error(struct HttpRequest* req) {
-	cc_string str; char buffer[STRING_SIZE];
+	cc_string str; char buffer[STRING_SIZE * 4];
 	String_InitArray(str, buffer);
 
 	Launcher_DisplayHttpError(req, "downloading resources", &str);
@@ -1159,7 +1253,7 @@ static void FetchResourcesScreen_Activated(struct LScreen* s_) {
 }
 
 static void FetchResourcesScreen_UpdateStatus(struct FetchResourcesScreen* s, int reqID) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	const char* name;
 	int count;
 
@@ -1168,7 +1262,7 @@ static void FetchResourcesScreen_UpdateStatus(struct FetchResourcesScreen* s, in
 
 	String_InitArray(str, strBuffer);
 	count = Fetcher_Downloaded + 1;
-	String_Format3(&str, "&eFetching %c.. (%i/%i)", name, &count, &Resources_MissingCount);
+	String_Format3(&str, Lang_Get("&eFetching %c.. (%i/%i)"), name, &count, &Resources_MissingCount);
 
 	if (String_Equals(&str, &s->lblStatus.text)) return;
 	LLabel_SetText(&s->lblStatus, &str);
@@ -1302,7 +1396,7 @@ static void ServersScreen_ReloadServers(struct ServersScreen* s) {
 
 static void ServersScreen_AddWidgets(struct ServersScreen* s) {
 	LInput_Add(s,  &s->iptSearch, 370, "Search servers..",               srv_iptSearch);
-	LInput_Add(s,  &s->iptHash,   475, "classicube.net/server/play/...", srv_iptHash);
+	LInput_Add(s,  &s->iptHash,   475, "classichate.vincs.nl/server/play/...", srv_iptHash);
 
 	LButton_Add(s, &s->btnBack,    110, 30, "Back",    
 				SwitchToMain,          srv_btnBack);
@@ -1411,15 +1505,16 @@ void ServersScreen_SetActive(void) {
 *#########################################################################################################################*/
 static struct SettingsScreen {
 	LScreen_Layout
-	struct LButton btnMode, btnColours, btnBack;
+	struct LButton btnMode, btnColours, btnBack, btnLang;
 	struct LLabel  lblMode, lblColours;
 	struct LCheckbox cbExtra, cbEmpty, cbScale;
 	struct LLine sep;
 } SettingsScreen CC_BIG_VAR;
 
-#define SETTINGS_SCREEN_MAX_WIDGETS 9
+#define SETTINGS_SCREEN_MAX_WIDGETS 10
 static struct LWidget* settings_widgets[SETTINGS_SCREEN_MAX_WIDGETS];
 
+LAYOUTS set_btnLang[]    = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE, -120 } };
 LAYOUTS set_btnMode[]    = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -70 } };
 LAYOUTS set_lblMode[]    = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -70 } };
 LAYOUTS set_btnColours[] = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -20 } };
@@ -1458,8 +1553,24 @@ static void SettingsScreen_DPIScaling(struct LCheckbox* w) {
 #endif
 }
 
+/* "Language: <current language>" - the language name is always shown in its own language */
+static char set_langText[STRING_SIZE * 4];
+static void SettingsScreen_SwitchLanguage(void* w) {
+	Lang_SetNext();
+	SettingsScreen_SetActive(); /* rebuild this screen with the new text */
+}
+
 static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
+	cc_string langStr;
+	String_InitArray_NT(langStr, set_langText);
+	Lang_AppendTo(&langStr, "Language");
+	String_AppendConst(&langStr, ": ");
+	Lang_AppendStored(&langStr, Lang_CurrentName());
+	set_langText[langStr.length] = '\0';
+
 	LLine_Add(s,   &s->sep, 380, set_sep);
+	LButton_Add(s, &s->btnLang, 240, 35, set_langText,
+				SettingsScreen_SwitchLanguage, set_btnLang);
 	LButton_Add(s, &s->btnMode, 110, 35, "Mode", 
 				SwitchToChooseMode, set_btnMode);
 	LLabel_Add(s,  &s->lblMode, "&eChange the enabled features", set_lblMode);
@@ -1483,7 +1594,7 @@ static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
 	LCheckbox_Add(s, &s->cbScale, "Use display scaling", 
 				SettingsScreen_DPIScaling, set_cbScale);
 	LButton_Add(s,   &s->btnBack, 80, 35, "Back", 
-				SwitchToMain, set_btnBack);
+				SwitchToOptions, set_btnBack);
 }
 
 static void SettingsScreen_Activated(struct LScreen* s_) {
@@ -1508,7 +1619,412 @@ void SettingsScreen_SetActive(void) {
 	s->maxWidgets = Array_Elems(settings_widgets);
 
 	s->Activated      = SettingsScreen_Activated;
+	s->title          = "General";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+/* Alias so new code can use the cleaner name */
+void GeneralScreen_SetActive(void) { SettingsScreen_SetActive(); }
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------OptionsScreen (CCPS hub)----------------------------------------*
+*#########################################################################################################################*/
+static struct OptionsScreen {
+	LScreen_Layout
+	struct LButton btnGeneral, btnServers, btnBack;
+	struct LLabel  lblGeneral, lblServers;
+} OptionsScreen CC_BIG_VAR;
+
+#define OPTIONS_SCREEN_MAX_WIDGETS 5
+static struct LWidget* options_widgets[OPTIONS_SCREEN_MAX_WIDGETS];
+
+LAYOUTS opt_btnGeneral[] = { { ANCHOR_CENTRE, -135 }, { ANCHOR_CENTRE, -50 } };
+LAYOUTS opt_lblGeneral[] = { { ANCHOR_CENTRE_MIN, -70 }, { ANCHOR_CENTRE, -50 } };
+LAYOUTS opt_btnServers[] = { { ANCHOR_CENTRE, -135 }, { ANCHOR_CENTRE,   0 } };
+LAYOUTS opt_lblServers[] = { { ANCHOR_CENTRE_MIN, -70 }, { ANCHOR_CENTRE,   0 } };
+LAYOUTS opt_btnBack[]    = { { ANCHOR_CENTRE,       0 }, { ANCHOR_CENTRE,  60 } };
+
+static void OptionsScreen_Activated(struct LScreen* s_) {
+	struct OptionsScreen* s = (struct OptionsScreen*)s_;
+	LButton_Add(s, &s->btnGeneral, 130, 35, "General",
+				SwitchToGeneral,  opt_btnGeneral);
+	LLabel_Add(s,  &s->lblGeneral, "&eChange general settings", opt_lblGeneral);
+	LButton_Add(s, &s->btnServers, 130, 35, "Servers",
+				SwitchToCCPSServers, opt_btnServers);
+	LLabel_Add(s,  &s->lblServers, "&eManage server list providers", opt_lblServers);
+	LButton_Add(s, &s->btnBack,     80, 35, "Back",
+				SwitchToMain,     opt_btnBack);
+}
+
+void OptionsScreen_SetActive(void) {
+	struct OptionsScreen* s = &OptionsScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = options_widgets;
+	s->maxWidgets = Array_Elems(options_widgets);
+
+	s->Activated      = OptionsScreen_Activated;
 	s->title          = "Options";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------CCPSServersScreen-----------------------------------------------*
+*#########################################################################################################################*/
+static struct CCPSServersScreen {
+	LScreen_Layout
+	struct LButton btnManage, btnAdd, btnSwitch, btnBack;
+	struct LLabel  lblManage, lblAdd, lblSwitch;
+	struct LLabel  lblActive;
+} CCPSServersScreen CC_BIG_VAR;
+
+#define CCPSSERVERS_SCREEN_MAX_WIDGETS 8
+static struct LWidget* ccpsServers_widgets[CCPSSERVERS_SCREEN_MAX_WIDGETS];
+
+LAYOUTS cps_btnManage[] = { { ANCHOR_CENTRE, -145 }, { ANCHOR_CENTRE, -70 } };
+LAYOUTS cps_lblManage[] = { { ANCHOR_CENTRE_MIN, -70 }, { ANCHOR_CENTRE, -70 } };
+LAYOUTS cps_btnAdd[]    = { { ANCHOR_CENTRE, -145 }, { ANCHOR_CENTRE, -20 } };
+LAYOUTS cps_lblAdd[]    = { { ANCHOR_CENTRE_MIN, -70 }, { ANCHOR_CENTRE, -20 } };
+LAYOUTS cps_btnSwitch[] = { { ANCHOR_CENTRE, -145 }, { ANCHOR_CENTRE,  30 } };
+LAYOUTS cps_lblSwitch[] = { { ANCHOR_CENTRE_MIN, -70 }, { ANCHOR_CENTRE,  30 } };
+LAYOUTS cps_lblActive[] = { { ANCHOR_CENTRE,       0 }, { ANCHOR_CENTRE,  80 } };
+LAYOUTS cps_btnBack[]   = { { ANCHOR_CENTRE,       0 }, { ANCHOR_CENTRE, 120 } };
+
+/* Static buffer for the "Active: ..." label text */
+static char cps_activeTextBuf[256];
+
+static void CCPSServersScreen_Activated(struct LScreen* s_) {
+	struct CCPSServersScreen* s = (struct CCPSServersScreen*)s_;
+	cc_string activeText;
+
+	LButton_Add(s, &s->btnManage, 160, 35, "Manage Servers",
+				SwitchToManageServers, cps_btnManage);
+	LLabel_Add(s,  &s->lblManage, "&eView and edit saved servers", cps_lblManage);
+	LButton_Add(s, &s->btnAdd,    150, 35, "Add Server",
+				SwitchToAddServer,     cps_btnAdd);
+	LLabel_Add(s,  &s->lblAdd,    "&eSave a new server", cps_lblAdd);
+	LButton_Add(s, &s->btnSwitch, 155, 35, "Switch Server",
+				SwitchToSwitchServer,  cps_btnSwitch);
+	LLabel_Add(s,  &s->lblSwitch, "&eChoose active server", cps_lblSwitch);
+
+	/* Build active-server label into static buffer */
+	activeText = String_FromRawArray(cps_activeTextBuf);
+	activeText.length = 0;
+	if (CCPS_ActiveServer < 0 || CCPS_ActiveServer >= CCPS_ServerCount) {
+		Lang_AppendTo(&activeText, "&aActive: Default (ClassiCube)");
+	} else {
+		Lang_AppendTo(&activeText, "&aActive: ");
+		String_AppendConst(&activeText, CCPS_Servers[CCPS_ActiveServer].displayName);
+	}
+	cps_activeTextBuf[activeText.length] = '\0';
+	LLabel_Add(s, &s->lblActive, cps_activeTextBuf, cps_lblActive);
+
+	LButton_Add(s, &s->btnBack, 80, 35, "Back",
+				SwitchToOptions, cps_btnBack);
+}
+
+void CCPSServersScreen_SetActive(void) {
+	struct CCPSServersScreen* s = &CCPSServersScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = ccpsServers_widgets;
+	s->maxWidgets = Array_Elems(ccpsServers_widgets);
+
+	s->Activated      = CCPSServersScreen_Activated;
+	s->title          = "Servers";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------ManageServersScreen---------------------------------------------*
+*#########################################################################################################################*/
+/* Dynamic per-row layouts (non-const so we can fill them at runtime) */
+static struct LLayout mgr_lblLayouts[CCPS_MAX_SERVERS][2];
+static struct LLayout mgr_editLayouts[CCPS_MAX_SERVERS][2];
+static struct LLayout mgr_delLayouts[CCPS_MAX_SERVERS][2];
+
+static struct ManageServersScreen {
+	LScreen_Layout
+	struct LLabel  lblNames[CCPS_MAX_SERVERS];
+	struct LButton btnEdit[CCPS_MAX_SERVERS];
+	struct LButton btnDel[CCPS_MAX_SERVERS];
+	struct LLabel  lblEmpty;
+	struct LButton btnBack;
+} ManageServersScreen CC_BIG_VAR;
+
+/* 8 rows * 3 widgets + lblEmpty + btnBack */
+#define MANAGE_SCREEN_MAX_WIDGETS (CCPS_MAX_SERVERS * 3 + 2)
+static struct LWidget* manage_widgets[MANAGE_SCREEN_MAX_WIDGETS];
+
+LAYOUTS mgr_lblEmpty[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -20 } };
+LAYOUTS mgr_btnBack[]  = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,     10 } };
+
+static void ManageServers_Delete(void* w) {
+	struct ManageServersScreen* s = &ManageServersScreen;
+	int i;
+	for (i = 0; i < CCPS_MAX_SERVERS; i++) {
+		if (w == &s->btnDel[i]) { CCPS_DeleteServer(i); break; }
+	}
+	ManageServersScreen_SetActive();
+}
+
+static void ManageServers_Edit(void* w) {
+	struct ManageServersScreen* s = &ManageServersScreen;
+	int i;
+	for (i = 0; i < CCPS_MAX_SERVERS; i++) {
+		if (w == &s->btnEdit[i]) {
+			AddEditServerScreen_SetActive(i);
+			return;
+		}
+	}
+}
+
+static void ManageServersScreen_Activated(struct LScreen* s_) {
+	struct ManageServersScreen* s = (struct ManageServersScreen*)s_;
+	int i, y;
+
+	if (CCPS_ServerCount == 0) {
+		LLabel_Add(s, &s->lblEmpty, "&eNo servers saved yet.", mgr_lblEmpty);
+	} else {
+		for (i = 0; i < CCPS_ServerCount; i++) {
+			/* Row y: -90 + i*35 keeps 8 rows within the content area */
+			y = -90 + i * 35;
+
+			/* Name label — left-anchored */
+			mgr_lblLayouts[i][0].type   = ANCHOR_MIN;
+			mgr_lblLayouts[i][0].offset = 10;
+			mgr_lblLayouts[i][1].type   = ANCHOR_CENTRE;
+			mgr_lblLayouts[i][1].offset = (short)y;
+			LLabel_Add(s, &s->lblNames[i], CCPS_Servers[i].displayName,
+				mgr_lblLayouts[i]);
+
+			/* Edit button — right side, secondary position */
+			mgr_editLayouts[i][0].type   = ANCHOR_MAX;
+			mgr_editLayouts[i][0].offset = 105;
+			mgr_editLayouts[i][1].type   = ANCHOR_CENTRE;
+			mgr_editLayouts[i][1].offset = (short)y;
+			LButton_Add(s, &s->btnEdit[i], 85, 28, "Edit",
+				ManageServers_Edit, mgr_editLayouts[i]);
+
+			/* Delete button — far right */
+			mgr_delLayouts[i][0].type   = ANCHOR_MAX;
+			mgr_delLayouts[i][0].offset = 10;
+			mgr_delLayouts[i][1].type   = ANCHOR_CENTRE;
+			mgr_delLayouts[i][1].offset = (short)y;
+			LButton_Add(s, &s->btnDel[i], 90, 28, "Delete",
+				ManageServers_Delete, mgr_delLayouts[i]);
+		}
+	}
+
+	LButton_Add(s, &s->btnBack, 80, 35, "Back",
+				SwitchToCCPSServers, mgr_btnBack);
+}
+
+void ManageServersScreen_SetActive(void) {
+	struct ManageServersScreen* s = &ManageServersScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = manage_widgets;
+	s->maxWidgets = Array_Elems(manage_widgets);
+
+	s->Activated      = ManageServersScreen_Activated;
+	s->title          = "Manage Servers";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------AddEditServerScreen---------------------------------------------*
+*#########################################################################################################################*/
+/* -1 = adding a new server, >= 0 = editing server at that index */
+static int addEdit_index;
+
+static struct AddEditServerScreen {
+	LScreen_Layout
+	struct LLabel  lblName, lblUrl, lblPort, lblStatus;
+	struct LInput  iptName, iptUrl, iptPort;
+	struct LButton btnSave, btnCancel;
+} AddEditServerScreen CC_BIG_VAR;
+
+#define ADDEDIT_SCREEN_MAX_WIDGETS 9
+static struct LWidget* addEdit_widgets[ADDEDIT_SCREEN_MAX_WIDGETS];
+
+LAYOUTS ae_lblName[]   = { { ANCHOR_CENTRE_MIN, -185 }, { ANCHOR_CENTRE, -90 } };
+LAYOUTS ae_iptName[]   = { { ANCHOR_CENTRE_MIN, -140 }, { ANCHOR_CENTRE, -65 } };
+LAYOUTS ae_lblUrl[]    = { { ANCHOR_CENTRE_MIN, -185 }, { ANCHOR_CENTRE, -20 } };
+LAYOUTS ae_iptUrl[]    = { { ANCHOR_CENTRE_MIN, -140 }, { ANCHOR_CENTRE,   5 } };
+LAYOUTS ae_lblPort[]   = { { ANCHOR_CENTRE_MIN, -185 }, { ANCHOR_CENTRE,  50 } };
+LAYOUTS ae_iptPort[]   = { { ANCHOR_CENTRE_MIN, -140 }, { ANCHOR_CENTRE,  75 } };
+LAYOUTS ae_lblStatus[] = { { ANCHOR_CENTRE,       0  }, { ANCHOR_CENTRE, 115 } };
+LAYOUTS ae_btnSave[]   = { { ANCHOR_CENTRE,  -60  }, { ANCHOR_CENTRE, 145 } };
+LAYOUTS ae_btnCancel[] = { { ANCHOR_CENTRE,   60  }, { ANCHOR_CENTRE, 145 } };
+
+static void AddEditServer_Save(void* w) {
+	struct AddEditServerScreen* s = &AddEditServerScreen;
+	cc_string name, url, port;
+
+	LInput_UNSAFE_GetText(&s->iptName, &name);
+	LInput_UNSAFE_GetText(&s->iptUrl,  &url);
+	LInput_UNSAFE_GetText(&s->iptPort, &port);
+
+	if (!name.length) {
+		LLabel_SetConst(&s->lblStatus, "&cDisplay name required"); return;
+	}
+	if (!url.length) {
+		LLabel_SetConst(&s->lblStatus, "&cURL required"); return;
+	}
+
+	if (addEdit_index < 0) {
+		if (!CCPS_AddServer(&name, &url, &port)) {
+			LLabel_SetConst(&s->lblStatus, "&cMax servers reached (8)"); return;
+		}
+	} else {
+		CCPS_UpdateServer(addEdit_index, &name, &url, &port);
+	}
+	ManageServersScreen_SetActive();
+}
+
+static void AddEditServer_Cancel(void* w) {
+	ManageServersScreen_SetActive();
+}
+
+static void AddEditServerScreen_Activated(struct LScreen* s_) {
+	struct AddEditServerScreen* s = (struct AddEditServerScreen*)s_;
+
+	LLabel_Add(s,  &s->lblName,   "Display name",  ae_lblName);
+	LInput_Add(s,  &s->iptName,   280, "e.g. My Private Server", ae_iptName);
+	LLabel_Add(s,  &s->lblUrl,    "URL / IP",       ae_lblUrl);
+	LInput_Add(s,  &s->iptUrl,    280, "e.g. https://example.com/api", ae_iptUrl);
+	LLabel_Add(s,  &s->lblPort,   "Port (info only)", ae_lblPort);
+	LInput_Add(s,  &s->iptPort,    80, "e.g. 25565",   ae_iptPort);
+	LLabel_Add(s,  &s->lblStatus, "",               ae_lblStatus);
+	LButton_Add(s, &s->btnSave,   100, 35, "Save",   AddEditServer_Save,   ae_btnSave);
+	LButton_Add(s, &s->btnCancel, 100, 35, "Cancel", AddEditServer_Cancel, ae_btnCancel);
+
+	/* Pre-fill if editing */
+	if (addEdit_index >= 0 && addEdit_index < CCPS_ServerCount) {
+		struct CCPSServer* srv = &CCPS_Servers[addEdit_index];
+		cc_string v;
+		v = String_FromRawArray(srv->displayName); LInput_SetText(&s->iptName, &v);
+		v = String_FromRawArray(srv->url);         LInput_SetText(&s->iptUrl,  &v);
+		v = String_FromRawArray(srv->port);        LInput_SetText(&s->iptPort, &v);
+	}
+}
+
+void AddEditServerScreen_SetActive(int editIndex) {
+	struct AddEditServerScreen* s = &AddEditServerScreen;
+	addEdit_index = editIndex;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = addEdit_widgets;
+	s->maxWidgets = Array_Elems(addEdit_widgets);
+
+	s->Activated      = AddEditServerScreen_Activated;
+	s->title          = (editIndex < 0) ? "Add Server" : "Edit Server";
+	s->onEnterWidget  = (struct LWidget*)&s->btnSave;
+	s->onEscapeWidget = (struct LWidget*)&s->btnCancel;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------SwitchServerScreen----------------------------------------------*
+*#########################################################################################################################*/
+static struct LLayout sw_btnLayouts[CCPS_MAX_SERVERS + 1][2]; /* +1 for Default */
+
+static struct SwitchServerScreen {
+	LScreen_Layout
+	struct LButton btnDefault;
+	struct LButton btnServers[CCPS_MAX_SERVERS];
+	struct LButton btnBack;
+} SwitchServerScreen CC_BIG_VAR;
+
+/* Default + 8 servers + Back */
+#define SWITCH_SCREEN_MAX_WIDGETS (CCPS_MAX_SERVERS + 2)
+static struct LWidget* switch_widgets[SWITCH_SCREEN_MAX_WIDGETS];
+
+LAYOUTS sw_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX, 10 } };
+
+static void SwitchServer_SetDefault(void* w) {
+	CCPS_SetActive(-1);
+	SwitchServerScreen_SetActive();
+}
+
+static void SwitchServer_SetCustom(void* w) {
+	struct SwitchServerScreen* s = &SwitchServerScreen;
+	int i;
+	for (i = 0; i < CCPS_MAX_SERVERS; i++) {
+		if (w == &s->btnServers[i]) { CCPS_SetActive(i); break; }
+	}
+	SwitchServerScreen_SetActive();
+}
+
+/* Per-slot static label buffers for "> active <" marking */
+static char sw_markedBuf[CCPS_MAX_SERVERS][128];
+
+static void SwitchServerScreen_Activated(struct LScreen* s_) {
+	struct SwitchServerScreen* s = (struct SwitchServerScreen*)s_;
+	const char* label;
+	cc_string marked;
+	int i, y;
+
+	/* Default (ClassiCube) button — at top */
+	sw_btnLayouts[0][0].type   = ANCHOR_CENTRE;
+	sw_btnLayouts[0][0].offset = 0;
+	sw_btnLayouts[0][1].type   = ANCHOR_CENTRE;
+	sw_btnLayouts[0][1].offset = -90;
+	label = (CCPS_ActiveServer < 0) ? "> Default (ClassiCube) <" : "Default (ClassiCube)";
+	LButton_Add(s, &s->btnDefault, 270, 32, label,
+				SwitchServer_SetDefault, sw_btnLayouts[0]);
+
+	for (i = 0; i < CCPS_ServerCount; i++) {
+		y = -90 + (i + 1) * 40;
+		sw_btnLayouts[i + 1][0].type   = ANCHOR_CENTRE;
+		sw_btnLayouts[i + 1][0].offset = 0;
+		sw_btnLayouts[i + 1][1].type   = ANCHOR_CENTRE;
+		sw_btnLayouts[i + 1][1].offset = (short)y;
+
+		if (CCPS_ActiveServer == i) {
+			/* Build "> Name <" into persistent static buffer */
+			marked = String_FromRawArray(sw_markedBuf[i]);
+			marked.length = 0;
+			String_AppendConst(&marked, "> ");
+			String_AppendConst(&marked, CCPS_Servers[i].displayName);
+			String_AppendConst(&marked, " <");
+			sw_markedBuf[i][marked.length] = '\0';
+			label = sw_markedBuf[i];
+		} else {
+			label = CCPS_Servers[i].displayName;
+		}
+
+		LButton_Add(s, &s->btnServers[i], 270, 32, label,
+					SwitchServer_SetCustom, sw_btnLayouts[i + 1]);
+	}
+
+	LButton_Add(s, &s->btnBack, 80, 35, "Back",
+				SwitchToCCPSServers, sw_btnBack);
+}
+
+void SwitchServerScreen_SetActive(void) {
+	struct SwitchServerScreen* s = &SwitchServerScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = switch_widgets;
+	s->maxWidgets = Array_Elems(switch_widgets);
+
+	s->Activated      = SwitchServerScreen_Activated;
+	s->title          = "Switch Server";
 	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
 
 	Launcher_SetScreen((struct LScreen*)s);
@@ -1618,36 +2134,42 @@ LAYOUTS upd_btnDev1_2[] = { { ANCHOR_CENTRE,  80 }, { ANCHOR_CENTRE,  55 } };
 CC_NOINLINE static void UpdatesScreen_FormatTime(cc_string* str, int delta) {
 	const char* span;
 	int unit, value = Math_AbsI(delta);
+	cc_bool plural;
 
+	/* checked on the raw value so each language can supply its own singular/plural words */
 	if (value < SECS_PER_MIN) {
-		span = "second";  unit = 1;
+		unit = 1;
 	} else if (value < SECS_PER_HOUR) {
-		span = "minute";  unit = SECS_PER_MIN;
+		unit = SECS_PER_MIN;
 	} else if (value < SECS_PER_DAY) {
-		span = "hour";    unit = SECS_PER_HOUR;
+		unit = SECS_PER_HOUR;
 	} else {
-		span = "day";     unit = SECS_PER_DAY;
+		unit = SECS_PER_DAY;
 	}
 
 	value /= unit;
+	plural = value > 1;
+	if (unit == 1)                 span = plural ? "seconds" : "second";
+	else if (unit == SECS_PER_MIN) span = plural ? "minutes" : "minute";
+	else if (unit == SECS_PER_HOUR) span = plural ? "hours"  : "hour";
+	else                           span = plural ? "days"    : "day";
+
 	String_AppendInt(str, value);
 	String_Append(str, ' ');
-	String_AppendConst(str, span);
-
-	if (value > 1) String_Append(str, 's');
-	String_AppendConst(str, delta >= 0 ? " ago" : " in the future");
+	Lang_AppendTo(str, span);
+	Lang_AppendTo(str, delta >= 0 ? " ago" : " in the future");
 }
 
 static void UpdatesScreen_Format(struct LLabel* lbl, const char* prefix, cc_uint64 timestamp) {
-	cc_string str; char buffer[STRING_SIZE];
+	cc_string str; char buffer[STRING_SIZE * 4];
 	TimeMS now;
 	int delta;
 
 	String_InitArray(str, buffer);
-	String_AppendConst(&str, prefix);
+	Lang_AppendTo(&str, prefix);
 
 	if (!timestamp) {
-		String_AppendConst(&str, "&cCheck failed");
+		Lang_AppendTo(&str, "&cCheck failed");
 	} else {
 		now   = DateTime_CurrentUTC() - UNIX_EPOCH_SECONDS;
 		delta = (int)(now - timestamp);
@@ -1664,12 +2186,13 @@ static void UpdatesScreen_FormatBoth(struct UpdatesScreen* s) {
 static void UpdatesScreen_UpdateHeader(struct UpdatesScreen* s, cc_string* str) {
 	const char* message = s->release ? "release " : "dev build ";
 
-	String_Format2(str, "&eFetching latest %c%c", 
-					message, Updater_Info.builds[s->buildIndex].name);
+	Lang_AppendTo(str, "&eFetching latest ");
+	Lang_AppendTo(str, message);
+	String_AppendConst(str, Updater_Info.builds[s->buildIndex].name);
 }
 
 static void UpdatesScreen_DoFetch(struct UpdatesScreen* s) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	cc_uint64 time;
 	
 	time = s->release ? CheckUpdateTask.relTimestamp : CheckUpdateTask.devTimestamp;
@@ -1707,7 +2230,7 @@ static void UpdatesScreen_CheckTick(struct UpdatesScreen* s) {
 }
 
 static void UpdatesScreen_UpdateProgress(struct UpdatesScreen* s, struct LWebTask* task) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	int progress = Http_CheckProgress(task->reqID);
 	if (progress == s->buildProgress) return;
 
@@ -1721,7 +2244,7 @@ static void UpdatesScreen_UpdateProgress(struct UpdatesScreen* s, struct LWebTas
 }
 
 static void FetchUpdatesError(struct HttpRequest* req) {
-	cc_string str; char strBuffer[STRING_SIZE];
+	cc_string str; char strBuffer[STRING_SIZE * 4];
 	String_InitArray(str, strBuffer);
 
 	Launcher_DisplayHttpError(req, "fetching update", &str);
@@ -1737,7 +2260,7 @@ static void UpdatesScreen_FetchTick(struct UpdatesScreen* s) {
 
 	if (!FetchUpdateTask.Base.success) return;
 	/* FetchUpdateTask handles saving the updated file for us */
-	Launcher_ShouldStop   = true;
+	Launcher_ShouldExit   = true;
 	Launcher_ShouldUpdate = true;
 }
 
@@ -1825,4 +2348,440 @@ void UpdatesScreen_SetActive(void) {
 
 	Launcher_SetScreen((struct LScreen*)s);
 }
+
+
+/*########################################################################################################################*
+*-------------------------------------------------FriendsHubScreen--------------------------------------------------------*
+*#########################################################################################################################*/
+static struct FriendsHubScreen {
+	LScreen_Layout
+	struct LButton btnFriendsList, btnAddFriend, btnRequests, btnBack;
+} FriendsHubScreen CC_BIG_VAR;
+
+static struct LWidget* friendsHub_widgets[3];
+
+LAYOUTS fhub_btnList[]     = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -60 } };
+LAYOUTS fhub_btnAdd[]      = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,   0 } };
+LAYOUTS fhub_btnRequests[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  60 } };
+LAYOUTS fhub_btnBack[]     = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,     30 } };
+
+static void FriendsHubScreen_Activated(struct LScreen* s_) {
+	struct FriendsHubScreen* s = (struct FriendsHubScreen*)s_;
+	LButton_Add(s, &s->btnAddFriend,   240, 35, "Add Friend",
+				SwitchToAddFriendScreen,   fhub_btnAdd);
+	LButton_Add(s, &s->btnRequests,    240, 35, "Friend Requests",
+				SwitchToFriendRequestsScreen, fhub_btnRequests);
+	LButton_Add(s, &s->btnBack,        200, 35, "Back",
+				SwitchToMain, fhub_btnBack);
+}
+
+void FriendsHubScreen_SetActive(void) {
+	struct FriendsHubScreen* s = &FriendsHubScreen;
+	if (!Friends_HasUsername() && Launcher_Username.length) Friends_Login(&Launcher_Username);
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = friendsHub_widgets;
+	s->maxWidgets = Array_Elems(friendsHub_widgets);
+	s->Activated  = FriendsHubScreen_Activated;
+	s->title      = "Friends";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*-----------------------------------------------FriendsListScreen---------------------------------------------------------*
+*#########################################################################################################################*/
+#define FLIST_MAX 8
+static struct FriendsListScreen {
+	LScreen_Layout
+	struct LButton entries[FLIST_MAX];
+	struct LButton btnLeft, btnRight, btnBack;
+	struct LLabel  lblStatus;
+	char entryBuf[FLIST_MAX][80];
+	int page;
+	int lastVersion;
+} FriendsListScreen CC_BIG_VAR;
+
+static struct LWidget* friendsList_widgets[FLIST_MAX + 4];
+
+LAYOUTS fl_lblStatus[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -130 } };
+LAYOUTS fl_btnLeft[]   = { { ANCHOR_CENTRE, -120 }, { ANCHOR_MAX, 80 } };
+LAYOUTS fl_btnRight[]  = { { ANCHOR_CENTRE,  120 }, { ANCHOR_MAX, 80 } };
+LAYOUTS fl_btnBack[]   = { { ANCHOR_CENTRE,    0 }, { ANCHOR_MAX, 30 } };
+
+static struct LLayout fl_entries[FLIST_MAX][2] = {
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -100 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  -60 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  -20 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,   20 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,   60 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  100 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  140 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  180 }},
+};
+
+static void FriendsListScreen_PageLeft(void* w)  {
+	if (FriendsListScreen.page > 0) FriendsListScreen.page--;
+	FriendsListScreen_SetActive();
+}
+static void FriendsListScreen_PageRight(void* w) {
+	FriendsListScreen.page++;
+	FriendsListScreen_SetActive();
+}
+
+static void FriendsListScreen_EntryClick(void* widget) {
+	struct LButton* btn = (struct LButton*)widget;
+	cc_string name = btn->text;
+	if (name.length >= 2 && name.buffer[0] == '&') {
+		name = String_UNSAFE_Substring(&name, 2, name.length - 2);
+	}
+	FriendManageScreen_SetActive(&name);
+}
+
+static void FriendsListScreen_Activated(struct LScreen* s_) {
+	struct FriendsListScreen* s = (struct FriendsListScreen*)s_;
+	int start = s->page * FLIST_MAX;
+	int i, shown = 0;
+	cc_string text;
+
+	if (!Friends_ListVersion) Friends_FetchList();
+
+	if (!Friends_ListVersion)
+		LLabel_Add(s, &s->lblStatus, "Loading...", fl_lblStatus);
+	else
+		LLabel_Add(s, &s->lblStatus, "", fl_lblStatus);
+
+	for (i = start; i < Friends_Count && shown < FLIST_MAX; i++, shown++) {
+		struct FriendEntry* e = &Friends_List[i];
+		String_InitArray(text, s->entryBuf[shown]);
+		/* green = online, white = offline */
+		if (e->status == FRIEND_ONLINE)
+			String_Format1(&text, "&a%s", &e->name);
+		else
+			String_AppendString(&text, &e->name);
+		LButton_Add(s, &s->entries[shown], 300, 30,
+					text.buffer, FriendsListScreen_EntryClick,
+					fl_entries[shown]);
+	}
+	if (Friends_ListVersion == 0)
+		LLabel_SetConst(&s->lblStatus, "Loading...");
+	else if (Friends_Count == 0)
+		LLabel_SetConst(&s->lblStatus, "No friends yet!");
+	else
+		LLabel_SetConst(&s->lblStatus, "");
+
+	if (start > 0)
+		LButton_Add(s, &s->btnLeft,  60, 30, "<", FriendsListScreen_PageLeft,  fl_btnLeft);
+	if (Friends_Count > start + FLIST_MAX)
+		LButton_Add(s, &s->btnRight, 60, 30, ">", FriendsListScreen_PageRight, fl_btnRight);
+	LButton_Add(s, &s->btnBack, 200, 35, "Back", SwitchToFriends, fl_btnBack);
+}
+
+static void FriendsListScreen_Tick(struct LScreen* s_) {
+	struct FriendsListScreen* s = (struct FriendsListScreen*)s_;
+	if (s->lastVersion == Friends_ListVersion) return;
+	s->lastVersion = Friends_ListVersion;
+	if (Friends_ListVersion) FriendsListScreen_SetActive();
+}
+
+void FriendsListScreen_SetActive(void) {
+	struct FriendsListScreen* s = &FriendsListScreen;
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = friendsList_widgets;
+	s->maxWidgets = Array_Elems(friendsList_widgets);
+	s->Activated  = FriendsListScreen_Activated;
+	s->Tick       = FriendsListScreen_Tick;
+	s->title      = "Friends";
+	s->lastVersion = Friends_ListVersion;
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*-----------------------------------------------FriendManageScreen--------------------------------------------------------*
+*#########################################################################################################################*/
+static struct FriendManageScreen {
+	LScreen_Layout
+	struct LButton btnUnfriend, btnJoin, btnBack;
+	struct LLabel  lblName;
+	char targetBuf[64];
+	cc_string target;
+} FriendManageScreen CC_BIG_VAR;
+
+static struct LWidget* friendManage_widgets[4];
+LAYOUTS fm_lblName[]    = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -80 } };
+LAYOUTS fm_btnUnfriend[]= { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -20 } };
+LAYOUTS fm_btnJoin[]    = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  30 } };
+LAYOUTS fm_btnBack[]    = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,     30 } };
+
+static void FriendManageScreen_Unfriend(void* w) {
+	Friends_Remove(&FriendManageScreen.target);
+	FriendsListScreen_SetActive();
+}
+
+static void FriendManageScreen_Join(void* w) {
+	/* Find the friend's server string */
+	int i;
+	for (i = 0; i < Friends_Count; i++) {
+		if (String_Equals(&Friends_List[i].name, &FriendManageScreen.target)) {
+			cc_string srv = Friends_List[i].server;
+			if (srv.length) {
+				/* server is "ip:port" - parse and connect */
+				cc_string ip, portStr;
+				char portBuf[8] = "25565";
+				int colon = String_IndexOf(&srv, ':');
+				if (colon >= 0) {
+					ip      = String_UNSAFE_Substring(&srv, 0, colon);
+					portStr = String_UNSAFE_Substring(&srv, colon + 1,
+													  srv.length - colon - 1);
+					Mem_Copy(portBuf, portStr.buffer, portStr.length);
+					portBuf[portStr.length] = '\0';
+				} else { ip = srv; }
+				{
+					cc_string portCC = String_FromReadonly(portBuf);
+					Launcher_StartGame(&Launcher_Username, &String_Empty,
+									   &ip, &portCC, &String_Empty, 1);
+				}
+			}
+			break;
+		}
+	}
+}
+
+static void FriendManageScreen_Activated(struct LScreen* s_) {
+	struct FriendManageScreen* s = (struct FriendManageScreen*)s_;
+	int i; cc_bool online = false; cc_bool inServer = false;
+	char nameLbl[256]; cc_string nameLblStr;
+	String_InitArray(nameLblStr, nameLbl);
+	String_AppendString(&nameLblStr, &s->target);
+
+	for (i = 0; i < Friends_Count; i++) {
+		if (String_Equals(&Friends_List[i].name, &s->target)) {
+			online   = (Friends_List[i].status == FRIEND_ONLINE);
+			inServer = online && Friends_List[i].server.length > 0;
+			break;
+		}
+	}
+	if (online) Lang_AppendTo(&nameLblStr, " &a(Online)");
+	else        Lang_AppendTo(&nameLblStr, " &7(Offline)");
+
+	LLabel_Add(s,  &s->lblName,    nameLblStr.buffer,   fm_lblName);
+	LButton_Add(s, &s->btnUnfriend, 200, 35, "Unfriend",
+				FriendManageScreen_Unfriend, fm_btnUnfriend);
+	if (inServer)
+		LButton_Add(s, &s->btnJoin, 200, 35, "Join Friend's Server",
+					FriendManageScreen_Join, fm_btnJoin);
+	LButton_Add(s, &s->btnBack, 200, 35, "Back",
+				SwitchToFriendsListScreen, fm_btnBack);
+}
+
+void FriendManageScreen_SetActive(const cc_string* target) {
+	struct FriendManageScreen* s = &FriendManageScreen;
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = friendManage_widgets;
+	s->maxWidgets = Array_Elems(friendManage_widgets);
+	s->Activated  = FriendManageScreen_Activated;
+	s->title      = "Manage Friend";
+
+	Mem_Copy(s->targetBuf, target->buffer,
+			 target->length < 63 ? target->length : 63);
+	s->targetBuf[target->length < 63 ? target->length : 63] = '\0';
+	s->target = String_FromReadonly(s->targetBuf);
+
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*-----------------------------------------------AddFriendScreen-----------------------------------------------------------*
+*#########################################################################################################################*/
+static struct AddFriendScreen {
+	LScreen_Layout
+	struct LInput  iptName;
+	struct LButton btnSend, btnBack;
+	struct LLabel  lblStatus;
+} AddFriendScreen CC_BIG_VAR;
+
+static struct LWidget* addFriend_widgets[4];
+LAYOUTS af_iptName[]   = { { ANCHOR_CENTRE_MIN, -140 }, { ANCHOR_CENTRE, -30 } };
+LAYOUTS af_btnSend[]   = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 30 } };
+LAYOUTS af_lblStatus[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 70 } };
+LAYOUTS af_btnBack[]   = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,    30 } };
+
+static void AddFriendScreen_Send(void* w) {
+	struct AddFriendScreen* s = &AddFriendScreen;
+	cc_string name = s->iptName.text;
+	int i;
+	if (!name.length) {
+		LLabel_SetConst(&s->lblStatus, "&cEnter a username first"); return;
+	}
+	/* No spaces allowed */
+	for (i = 0; i < name.length; i++) {
+		if (name.buffer[i] == ' ') {
+			LLabel_SetConst(&s->lblStatus, "&cNo spaces in username"); return;
+		}
+	}
+	Friends_SendRequest(&name);
+	LLabel_SetConst(&s->lblStatus, "&aRequest sent!");
+	LInput_ClearText(&s->iptName);
+}
+
+static void AddFriendScreen_Activated(struct LScreen* s_) {
+	struct AddFriendScreen* s = (struct AddFriendScreen*)s_;
+	LInput_Add(s,  &s->iptName,   280, "Username (case sensitive)..", af_iptName);
+	LButton_Add(s, &s->btnSend,   200, 35, "Send Request",
+				AddFriendScreen_Send, af_btnSend);
+	LLabel_Add(s,  &s->lblStatus, "",  af_lblStatus);
+	LButton_Add(s, &s->btnBack,   200, 35, "Back",
+				SwitchToFriends, af_btnBack);
+}
+
+void AddFriendScreen_SetActive(void) {
+	struct AddFriendScreen* s = &AddFriendScreen;
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = addFriend_widgets;
+	s->maxWidgets = Array_Elems(addFriend_widgets);
+	s->Activated  = AddFriendScreen_Activated;
+	s->title      = "Add Friend";
+	s->onEnterWidget  = (struct LWidget*)&s->btnSend;
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------FriendRequestsScreen--------------------------------------------------------*
+*#########################################################################################################################*/
+#define FREQ_MAX 8
+static struct FriendRequestsScreen {
+	LScreen_Layout
+	struct LButton entries[FREQ_MAX];
+	struct LButton btnBack;
+	struct LLabel  lblStatus;
+	int page;
+	int lastVersion;
+} FriendRequestsScreen CC_BIG_VAR;
+
+static struct LWidget* friendReq_widgets[FREQ_MAX + 2];
+LAYOUTS fr_lblStatus[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -130 } };
+LAYOUTS fr_btnBack[]   = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,     30 } };
+static struct LLayout fr_entries[FREQ_MAX][2] = {
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -100 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  -60 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  -20 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,   20 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,   60 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  100 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  140 }},
+	{{ ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  180 }},
+};
+
+static void FriendRequestsScreen_EntryClick(void* widget) {
+	struct LButton* btn = (struct LButton*)widget;
+	FriendRequestManageScreen_SetActive(&btn->text);
+}
+
+static void FriendRequestsScreen_Activated(struct LScreen* s_) {
+	struct FriendRequestsScreen* s = (struct FriendRequestsScreen*)s_;
+	int start = s->page * FREQ_MAX;
+	int i, shown = 0;
+	if (!Friends_RequestVersion) Friends_FetchRequests();
+	if (!Friends_RequestVersion)
+		LLabel_Add(s, &s->lblStatus, "Loading...", fr_lblStatus);
+	else
+		LLabel_Add(s, &s->lblStatus, "", fr_lblStatus);
+	for (i = start; i < Friends_RequestCount && shown < FREQ_MAX; i++, shown++) {
+		LButton_Add(s, &s->entries[shown], 300, 30,
+					Friends_Requests[i].nameBuf,
+					FriendRequestsScreen_EntryClick, fr_entries[shown]);
+	}
+	if (Friends_RequestVersion == 0)
+		LLabel_SetConst(&s->lblStatus, "Loading...");
+	else if (Friends_RequestCount == 0)
+		LLabel_SetConst(&s->lblStatus, "No pending requests!");
+	else
+		LLabel_SetConst(&s->lblStatus, "");
+	LButton_Add(s, &s->btnBack, 200, 35, "Back", SwitchToFriends, fr_btnBack);
+}
+
+static void FriendRequestsScreen_Tick(struct LScreen* s_) {
+	struct FriendRequestsScreen* s = (struct FriendRequestsScreen*)s_;
+	if (s->lastVersion == Friends_RequestVersion) return;
+	s->lastVersion = Friends_RequestVersion;
+	if (Friends_RequestVersion) FriendRequestsScreen_SetActive();
+}
+
+void FriendRequestsScreen_SetActive(void) {
+	struct FriendRequestsScreen* s = &FriendRequestsScreen;
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = friendReq_widgets;
+	s->maxWidgets = Array_Elems(friendReq_widgets);
+	s->Activated  = FriendRequestsScreen_Activated;
+	s->Tick       = FriendRequestsScreen_Tick;
+	s->title      = "Friend Requests";
+	s->lastVersion = Friends_RequestVersion;
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*------------------------------------------FriendRequestManageScreen------------------------------------------------------*
+*#########################################################################################################################*/
+static struct FriendRequestManageScreen {
+	LScreen_Layout
+	struct LButton btnAccept, btnDecline, btnBack;
+	struct LLabel  lblName;
+	char   targetBuf[64];
+	cc_string target;
+} FriendRequestManageScreen CC_BIG_VAR;
+
+static struct LWidget* friendReqManage_widgets[4];
+LAYOUTS frm_lblName[]    = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -60 } };
+LAYOUTS frm_btnAccept[]  = { { ANCHOR_CENTRE, -80 }, { ANCHOR_CENTRE, 0 } };
+LAYOUTS frm_btnDecline[] = { { ANCHOR_CENTRE,  80 }, { ANCHOR_CENTRE, 0 } };
+LAYOUTS frm_btnBack[]    = { { ANCHOR_CENTRE,   0 }, { ANCHOR_MAX,   30 } };
+
+static void FriendRequestManageScreen_Accept(void* w) {
+	Friends_AcceptRequest(&FriendRequestManageScreen.target);
+	FriendRequestsScreen_SetActive();
+}
+static void FriendRequestManageScreen_Decline(void* w) {
+	Friends_DeclineRequest(&FriendRequestManageScreen.target);
+	FriendRequestsScreen_SetActive();
+}
+
+static void FriendRequestManageScreen_Activated(struct LScreen* s_) {
+	struct FriendRequestManageScreen* s = (struct FriendRequestManageScreen*)s_;
+	char lbl[256]; cc_string lblStr;
+	String_InitArray(lblStr, lbl);
+	String_Format1(&lblStr, Lang_Get("Friend request from %s"), &s->target);
+	LLabel_Add(s,  &s->lblName,    lbl,          frm_lblName);
+	LButton_Add(s, &s->btnAccept,  140, 35, "Accept",
+				FriendRequestManageScreen_Accept,  frm_btnAccept);
+	LButton_Add(s, &s->btnDecline, 140, 35, "Decline",
+				FriendRequestManageScreen_Decline, frm_btnDecline);
+	LButton_Add(s, &s->btnBack,    200, 35, "Back",
+				SwitchToFriendRequestsScreen, frm_btnBack);
+}
+
+void FriendRequestManageScreen_SetActive(const cc_string* from) {
+	struct FriendRequestManageScreen* s = &FriendRequestManageScreen;
+	LScreen_Reset((struct LScreen*)s);
+	s->widgets    = friendReqManage_widgets;
+	s->maxWidgets = Array_Elems(friendReqManage_widgets);
+	s->Activated  = FriendRequestManageScreen_Activated;
+	s->title      = "Friend Request";
+	Mem_Copy(s->targetBuf, from->buffer,
+			 from->length < 63 ? from->length : 63);
+	s->targetBuf[from->length < 63 ? from->length : 63] = '\0';
+	s->target = String_FromReadonly(s->targetBuf);
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+/* end of friends screens */
+
 #endif

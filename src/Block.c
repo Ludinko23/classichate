@@ -420,8 +420,8 @@ static void Block_UpdateCulling(BlockID block) {
 *---------------------------------------------------------Block-----------------------------------------------------------*
 *#########################################################################################################################*/
 static cc_uint32 definedCustomBlocks[BLOCK_COUNT >> 5];
-static CC_BIG_VAR char Block_NamesBuffer[STRING_SIZE * BLOCK_COUNT];
-#define Block_NamePtr(i) &Block_NamesBuffer[STRING_SIZE * i]
+static CC_BIG_VAR char Block_NamesBuffer[STRING_SIZE * 4 * BLOCK_COUNT];
+#define Block_NamePtr(i) &Block_NamesBuffer[STRING_SIZE * 4 * i]
 
 cc_bool Block_IsCustomDefined(BlockID block) {
 	return (definedCustomBlocks[block >> 5] & (1u << (block & 0x1F))) != 0;
@@ -509,11 +509,11 @@ void Block_ResetProps(BlockID block) {
 }
 
 STRING_REF cc_string Block_UNSAFE_GetName(BlockID block) {
-	return String_FromRaw(Block_NamePtr(block), STRING_SIZE);
+	return String_FromRaw(Block_NamePtr(block), STRING_SIZE * 4);
 }
 
 void Block_SetName(BlockID block, const cc_string* name) {
-	String_CopyToRaw(Block_NamePtr(block), STRING_SIZE, name);
+	String_CopyToRaw(Block_NamePtr(block), STRING_SIZE * 4, name);
 }
 
 int Block_FindID(const cc_string* name) {
@@ -724,7 +724,7 @@ static int FindRotated(cc_string* name, int offset) {
 }
 
 BlockID AutoRotate_RotateBlock(BlockID block) {
-	cc_string str; char strBuffer[STRING_SIZE * 2];
+	cc_string str; char strBuffer[STRING_SIZE * 4 + 8];
 	cc_string name;
 	int rotated;
 	

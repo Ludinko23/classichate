@@ -9,15 +9,38 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define GAME_APP_VER "1.3.7"
 #define GAME_API_VER 1
 
-#if defined CC_BUILD_WEB
-#define GAME_APP_ALT   "Classic%cHATE%e v2.1 Web Mobile"
-#define GAME_APP_NAME  "Classic%cHATE%e v2.1 Web"
-#define GAME_APP_TITLE "ClassicHATE v2.1"
+#define HATE_VER "v2.2"
+
+#if defined(CC_BUILD_ANDROID)
+    #define HATE_SUFFIX  ""
+    #define FromPlatform "Android"
+#elif defined(CC_BUILD_WIN)
+    #define HATE_SUFFIX  " Windows"
+    #define FromPlatform "Windows"
+#elif defined(CC_BUILD_LINUX)
+    #define HATE_SUFFIX  " Linux"
+    #define FromPlatform "Linux"
+#elif defined(CC_BUILD_ANDROID)
+    #define HATE_SUFFIX  " Android"
+    #define FromPlatform "Android"
+#elif defined(CC_BUILD_WEB)
+    #define HATE_SUFFIX  " Web"
+    #define FromPlatform "Web"
+#elif defined(CC_BUILD_WINCE)
+    #define HATE_SUFFIX  " Windows CE/Mobile"
+    #define FromPlatform "Windows CE/Mobile"
 #else
-#define GAME_APP_NAME  "Classic%cHATE%e v2.1"
-#define GAME_APP_TITLE "ClassicHATE v2.1"
+    #define HATE_SUFFIX  ""
+    #define FromPlatform "Unknown"
 #endif
 
+const char* Hate_SeasonName(void);  /* has & codes, you edit these */
+const char* Hate_AppTitle(void);    /* codes removed + version */
+const char* Hate_AppName(void);     /* codes kept (as %) + version */
+
+#define GAME_APP_NAME  Hate_AppName()    /* coloured, in-game */
+#define GAME_APP_TITLE Hate_AppTitle()   /* plain */
+#define GAME_APP_ALT   Hate_AppTitle()   /* plain */
 /* Max number of characters strings can have. */
 #define STRING_SIZE 64
 /* Max number of characters filenames can have. */
@@ -67,14 +90,12 @@ enum SKIN_TYPE { SKIN_64x32, SKIN_64x64, SKIN_64x64_SLIM, SKIN_INVALID = 0xF0 };
 #define Int32_MinValue  ((cc_int32)-2147483647L - (cc_int32)1L)
 #define Int32_MaxValue  ((cc_int32)2147483647L)
 
-#define SKINS_SERVER    "http://cdn.classicube.net/skin"
-#define UPDATES_SERVER  "https://cdn.classicube.net/client"
-#define SERVICES_SERVER "https://www.classicube.net/api"
-#define RESOURCE_SERVER "http://static.classicube.net"
+#define SKINS_SERVER    "https://classichate.vincs.nl/skin"
+#define UPDATES_SERVER  "https://classichate.vincs.nl/client"
+#define SERVICES_SERVER "https://classichate.vincs.nl/api"
+#define RESOURCE_SERVER "https://classichate.vincs.nl/resources"
 /* Webpage where users can register for a new account */
-#define REGISTERNEW_URL "https://www.classicube.net/acc/register/"
+#define REGISTERNEW_URL "https://classichate.vincs.nl/register/"
 
 #define DEFAULT_USERNAME "Singleplayer"
 #endif
-
-

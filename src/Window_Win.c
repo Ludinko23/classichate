@@ -95,6 +95,8 @@ static const cc_uint8 key_map[] = {
 /* D8 */ 0, 0, 0, CCKEY_LBRACKET, CCKEY_BACKSLASH, CCKEY_RBRACKET, CCKEY_QUOTE, 0,
 };
 
+static cc_unichar win_highSurrogate;
+
 static int MapNativeKey(WPARAM vk_key, LPARAM meta) {
 	LPARAM ext      = meta & (1UL << 24);
 	LPARAM scancode = (meta >> 16) & 0xFF;
@@ -177,11 +179,22 @@ static LRESULT CALLBACK Window_Procedure(HWND handle, UINT message, WPARAM wPara
 		GrabCursor();
 		RefreshWindowPosition();
 		break;
-
-	case WM_CHAR:
-		/* TODO: Use WM_UNICHAR instead, as WM_CHAR is just utf16 */
-		Event_RaiseInt(&InputEvents.Press, (cc_unichar)wParam);
+	case WM_CHAR: {
+		cc_unichar unit = (cc_unichar)wParam;
+		if (unit >= 0xD800 && unit <= 0xDBFF) {
+			win_highSurrogate = unit;
+		} else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+			if (win_highSurrogate) {
+				cc_codepoint cp = 0x10000 + ((win_highSurrogate - 0xD800) << 10) + (unit - 0xDC00);
+				win_highSurrogate = 0;
+				Event_RaiseInt(&InputEvents.Press, cp);
+			}
+		} else {
+			win_highSurrogate = 0;
+			Event_RaiseInt(&InputEvents.Press, unit);
+		}
 		break;
+	}
 
 	case WM_MOUSEMOVE:
 		/* Set before position change, in case mouse buttons changed when outside window */

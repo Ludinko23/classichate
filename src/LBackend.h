@@ -19,8 +19,7 @@ struct LSlider;
 struct LTable;
 struct Flag;
 
-typedef void (*LBackend_DrawHook)(void);
-extern struct Context2D LBackend_FB;
+typedef void (*LBackend_DrawHook)(struct Context2D* ctx);
 extern LBackend_DrawHook LBackend_Hooks[4];
 
 void LBackend_Init(void);

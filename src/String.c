@@ -39,8 +39,8 @@ void String_Copy(cc_string* dst, const cc_string* src) {
 }
 
 int String_CopyToRaw(char* dst, int capacity, const cc_string* src) {
-	int i, len = min(capacity, src->length);
-	for (i = 0; i < len; i++) { dst[i] = src->buffer[i]; }
+	int i, len = String_SplitPoint(src, min(capacity, src->length));
+	for (i = 0; i < len; i++) dst[i] = src->buffer[i];
 
 	/* add \0 to mark end of used portion of buffer */
 	if (len < capacity) dst[len] = '\0';
@@ -148,16 +148,21 @@ int String_CaselessEqualsConst(const cc_string* a, const char* b) {
 }
 
 
-void String_Append(cc_string* str, char c) {
-	/* MSVC in debug mode will initialise all variables on the stack with 0xCC by default */
-	/* So if a string is being passed with CC in all its fields, then it's probably invalid */
-#if _MSC_VER && _DEBUG
-	if (str->length == 0xCCCC && str->capacity == 0xCCCC) 
-		Process_Abort("String must be initialised before calling String_Append");
-#endif
-
+static void String_AppendRaw(cc_string* str, char c) {
 	if (str->length == str->capacity) return;
 	str->buffer[str->length++] = c;
+}
+
+void String_Append(cc_string* str, char c) {
+#if _MSC_VER && _DEBUG
+	if (str->length == 0xCCCC && str->capacity == 0xCCCC)
+		Process_Abort("String must be initialised before calling String_Append");
+#endif
+	if ((cc_uint8)c >= 0x80 || (cc_uint8)c == (cc_uint8)STRING_UNI_LEAD) {
+		String_AppendCodepoint(str, Convert_CP437ToUnicode(c));
+		return;
+	}
+	String_AppendRaw(str, c);
 }
 
 void String_AppendBool(cc_string* str, cc_bool value) {
@@ -256,6 +261,15 @@ CC_NOINLINE static void String_Hex64(cc_string* str, cc_uint64 value) {
 
 void String_AppendConst(cc_string* str, const char* src) {
 	for (; *src; src++) {
+		if (*src == STRING_UNI_LEAD && src[1] && src[2] && src[3]
+			&& ((cc_uint8)src[1] & 0x80) && ((cc_uint8)src[2] & 0x80) && ((cc_uint8)src[3] & 0x80)) {
+			/* translated text: a unicode escape (see String_AppendCodepoint), copy as-is */
+			if (str->capacity - str->length >= STRING_UNI_BYTES) {
+				str->buffer[str->length++] = src[0]; str->buffer[str->length++] = src[1];
+				str->buffer[str->length++] = src[2]; str->buffer[str->length++] = src[3];
+			}
+			src += STRING_UNI_BYTES - 1; continue;
+		}
 		String_Append(str, *src);
 	}
 }
@@ -263,24 +277,38 @@ void String_AppendConst(cc_string* str, const char* src) {
 void String_AppendAll(cc_string* str, const void* data, int len) {
 	const char* src = (const char*)data;
 	int i;
-	for (i = 0; i < len; i++) String_Append(str, src[i]);
+	for (i = 0; i < len; i++) String_AppendRaw(str, src[i]);
 }
 
 void String_AppendString(cc_string* str, const cc_string* src) {
-	int i;
-	for (i = 0; i < src->length; i++) {
-		String_Append(str, src->buffer[i]);
+	int i, len, j;
+	for (i = 0; i < src->length; i += len) {
+		len = String_CharLength(src, i);
+		if (len == 1 && (cc_uint8)src->buffer[i] >= 0x80) {
+			if (str->capacity - str->length < STRING_UNI_BYTES) break;
+			String_AppendCodepoint(str, Convert_CP437ToUnicode(src->buffer[i]));
+			continue;
+		}
+		if (str->capacity - str->length < len) break;
+		for (j = 0; j < len; j++) String_AppendRaw(str, src->buffer[i + j]);
 	}
 }
 
 void String_AppendColorless(cc_string* str, const cc_string* src) {
-	char c;
-	int i;
-
-	for (i = 0; i < src->length; i++) {
-		c = src->buffer[i];
-		if (c == '&') { i++; continue; } /* Skip over the following color code */
-		String_Append(str, c);
+	int i, len, j;
+	for (i = 0; i < src->length; i += len) {
+		if (src->buffer[i] == '&' && i + 1 < src->length
+			&& String_CharLength(src, i + 1) == 1 && (cc_uint8)src->buffer[i + 1] < 0x80) {
+			len = 2; continue;
+		}
+		len = String_CharLength(src, i);
+		if (len == 1 && (cc_uint8)src->buffer[i] >= 0x80) {
+			if (str->capacity - str->length < STRING_UNI_BYTES) break;
+			String_AppendCodepoint(str, Convert_CP437ToUnicode(src->buffer[i]));
+			continue;
+		}
+		if (str->capacity - str->length < len) break;
+		for (j = 0; j < len; j++) String_AppendRaw(str, src->buffer[i + j]);
 	}
 }
 
@@ -301,21 +329,21 @@ int String_LastIndexOfAt(const cc_string* str, int offset, char c) {
 	return -1;
 }
 
-void String_InsertAt(cc_string* str, int offset, char c) {
+static void String_InsertRawAt(cc_string* str, int offset, char c) {
 	int i;
-
-	if (offset < 0 || offset > str->length) {
-		Process_Abort("Offset for InsertAt out of range");
-	}
-	if (str->length == str->capacity) {
-		Process_Abort("Cannot insert character into full string");
-	}
-	
-	for (i = str->length; i > offset; i--) {
-		str->buffer[i] = str->buffer[i - 1];
-	}
+	if (offset < 0 || offset > str->length) Process_Abort("Offset for InsertAt out of range");
+	if (str->length == str->capacity) Process_Abort("Cannot insert character into full string");
+	for (i = str->length; i > offset; i--) str->buffer[i] = str->buffer[i - 1];
 	str->buffer[offset] = c;
 	str->length++;
+}
+
+void String_InsertAt(cc_string* str, int offset, char c) {
+	if ((cc_uint8)c >= 0x80 || (cc_uint8)c == (cc_uint8)STRING_UNI_LEAD) {
+		String_InsertCodepointAt(str, offset, Convert_CP437ToUnicode(c));
+		return;
+	}
+	String_InsertRawAt(str, offset, c);
 }
 
 void String_DeleteAt(cc_string* str, int offset) {
@@ -438,6 +466,15 @@ void String_Format4(cc_string* str, const char* format, const void* a1, const vo
 	args[0] = a1; args[1] = a2; args[2] = a3; args[3] = a4;
 
 	for (i = 0; format[i]; i++) {
+		if (format[i] == STRING_UNI_LEAD && format[i + 1] && format[i + 2] && format[i + 3]
+			&& ((cc_uint8)format[i + 1] & 0x80) && ((cc_uint8)format[i + 2] & 0x80) && ((cc_uint8)format[i + 3] & 0x80)) {
+			/* translated text: a unicode escape (see String_AppendCodepoint), copy as-is */
+			if (str->capacity - str->length >= STRING_UNI_BYTES) {
+				str->buffer[str->length++] = format[i];     str->buffer[str->length++] = format[i + 1];
+				str->buffer[str->length++] = format[i + 2]; str->buffer[str->length++] = format[i + 3];
+			}
+			i += STRING_UNI_BYTES - 1; continue;
+		}
 		if (format[i] != '%') { String_Append(str, format[i]); continue; }
 		arg = args[j++];
 
@@ -565,105 +602,257 @@ cc_bool Convert_TryCodepointToCP437(cc_codepoint cp, char* c) {
 }
 
 int Convert_Utf8ToCodepoint(cc_codepoint* cp, const cc_uint8* data, cc_uint32 len) {
-	*cp = '\0';
+	cc_uint8 a, b, c, d;
+	*cp = 0;
 	if (!len) return 0;
-
-	if (data[0] <= 0x7F) {
-		*cp = data[0];
-		return 1;
-	} else if ((data[0] & 0xE0) == 0xC0) {
-		if (len < 2) return 0;
-
-		*cp = ((data[0] & 0x1F) << 6)  | ((data[1] & 0x3F));
-		return 2;
-	} else if ((data[0] & 0xF0) == 0xE0) {
+	a = data[0];
+	if (a <= 0x7F) { *cp = a; return 1; }
+	if (a >= 0xC2 && a <= 0xDF) {
+		if (len < 2 || (data[1] & 0xC0) != 0x80) return 0;
+		*cp = ((a & 0x1F) << 6) | (data[1] & 0x3F); return 2;
+	}
+	if (a >= 0xE0 && a <= 0xEF) {
 		if (len < 3) return 0;
-
-		*cp = ((data[0] & 0x0F) << 12) | ((data[1] & 0x3F) << 6) 
-			| ((data[2] & 0x3F));
-		return 3;
-	} else {
+		b = data[1]; c = data[2];
+		if ((b & 0xC0) != 0x80 || (c & 0xC0) != 0x80) return 0;
+		if ((a == 0xE0 && b < 0xA0) || (a == 0xED && b >= 0xA0)) return 0;
+		*cp = ((a & 0x0F) << 12) | ((b & 0x3F) << 6) | (c & 0x3F); return 3;
+	}
+	if (a >= 0xF0 && a <= 0xF4) {
 		if (len < 4) return 0;
-
-		*cp = ((data[0] & 0x07) << 18) | ((data[1] & 0x3F) << 12) 
-			| ((data[2] & 0x3F) << 6)  |  (data[3] & 0x3F);
+		b = data[1]; c = data[2]; d = data[3];
+		if ((b & 0xC0) != 0x80 || (c & 0xC0) != 0x80 || (d & 0xC0) != 0x80) return 0;
+		if ((a == 0xF0 && b < 0x90) || (a == 0xF4 && b >= 0x90)) return 0;
+		*cp = ((a & 0x07) << 18) | ((b & 0x3F) << 12) | ((c & 0x3F) << 6) | (d & 0x3F);
 		return 4;
 	}
+	return 0;
 }
 
-/* Encodes a unicode character in UTF8, returning number of bytes written */
-static int Convert_UnicodeToUtf8(cc_unichar uc, cc_uint8* data) {
-	if (uc <= 0x7F) {
-		data[0] = (cc_uint8)uc;
-		return 1;
-	} else if (uc <= 0x7FF) {
-		data[0] = 0xC0 | ((uc >> 6) & 0x1F);
-		data[1] = 0x80 | ((uc)      & 0x3F);
-		return 2;
+/* Encodes a Unicode codepoint in UTF8, returning number of bytes written. */
+static int Convert_UnicodeToUtf8(cc_codepoint cp, cc_uint8* data) {
+	if (cp <= 0x7F) {
+		data[0] = (cc_uint8)cp; return 1;
+	} else if (cp <= 0x7FF) {
+		data[0] = 0xC0 | ((cp >> 6) & 0x1F);
+		data[1] = 0x80 | (cp & 0x3F); return 2;
+	} else if (cp <= 0xFFFF) {
+		data[0] = 0xE0 | ((cp >> 12) & 0x0F);
+		data[1] = 0x80 | ((cp >> 6) & 0x3F);
+		data[2] = 0x80 | (cp & 0x3F); return 3;
 	} else {
-		data[0] = 0xE0 | ((uc >> 12) & 0x0F);
-		data[1] = 0x80 | ((uc >>  6) & 0x3F);
-		data[2] = 0x80 | ((uc)       & 0x3F);
-		return 3;
+		data[0] = 0xF0 | ((cp >> 18) & 0x07);
+		data[1] = 0x80 | ((cp >> 12) & 0x3F);
+		data[2] = 0x80 | ((cp >> 6) & 0x3F);
+		data[3] = 0x80 | (cp & 0x3F); return 4;
 	}
 }
 
 int Convert_CP437ToUtf8(char c, cc_uint8* data) {
-	/* Common ASCII case */
-	if (c >= 0x20 && c < 0x7F) {
-		data[0] = (cc_uint8)c;
-		return 1;
-	}
+	if (c >= 0x20 && c < 0x7F) { data[0] = (cc_uint8)c; return 1; }
 	return Convert_UnicodeToUtf8(Convert_CP437ToUnicode(c), data);
+}
+
+cc_bool String_IsValidCodepoint(cc_codepoint cp) {
+	return cp > 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)
+		&& !(cp < 0x20 && cp != 0x09 && cp != 0x0A && cp != 0x0D)
+		&& !(cp >= 0x7F && cp <= 0x9F);
+}
+
+int String_AppendCodepoint(cc_string* str, cc_codepoint cp) {
+	if (!String_IsValidCodepoint(cp)) return 0;
+	/* Keep ASCII byte-compatible. Non-ASCII Unicode always uses the escape form,
+	   even when CP437 happens to contain the same codepoint, so custom glyph pages
+	   can override the legacy CP437 glyphs. */
+	if (cp < 0x80) {
+		if (str->length >= str->capacity) return 0;
+		String_AppendRaw(str, (char)cp); return 1;
+	}
+	if (str->capacity - str->length < STRING_UNI_BYTES) return 0;
+	String_AppendRaw(str, STRING_UNI_LEAD);
+	String_AppendRaw(str, (char)(0x80 | ((cp >> 14) & 0x7F)));
+	String_AppendRaw(str, (char)(0x80 | ((cp >> 7) & 0x7F)));
+	String_AppendRaw(str, (char)(0x80 | (cp & 0x7F)));
+	return STRING_UNI_BYTES;
+}
+
+static int EscapeLengthAt(const char* buf, int avail) {
+	int n;
+	if (avail <= 0 || buf[0] != STRING_UNI_LEAD) return 1;
+	for (n = 1; n < STRING_UNI_BYTES && n < avail && ((cc_uint8)buf[n] & 0x80); n++) { }
+	return n;
+}
+
+int String_CharLength(const cc_string* str, int index) {
+	if (index < 0 || index >= str->length) return 0;
+	return EscapeLengthAt(&str->buffer[index], str->length - index);
+}
+
+int String_CharLengthBefore(const cc_string* str, int index) {
+	int n;
+	if (index <= 0 || index > str->length) return 0;
+	for (n = 0; n < STRING_UNI_BYTES - 1 && n < index
+		&& ((cc_uint8)str->buffer[index - 1 - n] & 0x80); n++) { }
+	if (n > 0 && n < index && str->buffer[index - 1 - n] == STRING_UNI_LEAD) return n + 1;
+	return 1;
+}
+
+cc_codepoint String_GetCodepoint(const cc_string* str, int index, int* len) {
+	const cc_uint8* b;
+	cc_codepoint cp;
+	*len = String_CharLength(str, index);
+	if (!*len) return 0;
+	if (*len == 1) return Convert_CP437ToUnicode(str->buffer[index]);
+	if (*len != STRING_UNI_BYTES) return 0xFFFD;
+	b = (const cc_uint8*)&str->buffer[index];
+	cp = ((cc_codepoint)(b[1] & 0x7F) << 14) | ((cc_codepoint)(b[2] & 0x7F) << 7) | (b[3] & 0x7F);
+	return String_IsValidCodepoint(cp) ? cp : 0xFFFD;
+}
+
+cc_bool String_HasUnicode(const cc_string* str) {
+	int i;
+	for (i = 0; i < str->length; i += String_CharLength(str, i)) {
+		if (str->buffer[i] == STRING_UNI_LEAD && String_CharLength(str, i) > 1) return true;
+	}
+	return false;
+}
+
+void String_AppendCP437Only(cc_string* dst, const cc_string* src) {
+	int i, len; cc_codepoint cp; char c;
+	for (i = 0; i < src->length; i += len) {
+		cp = String_GetCodepoint(src, i, &len);
+		if (len == 1) String_Append(dst, src->buffer[i]);
+		else String_Append(dst, cp && Convert_TryCodepointToCP437(cp, &c) ? c : '?');
+	}
+}
+
+void String_AppendCP437(cc_string* dst, const void* data, int numBytes) {
+	const cc_uint8* bytes = (const cc_uint8*)data;
+	int i;
+	for (i = 0; i < numBytes; i++) {
+		if (!bytes[i]) {
+			String_Append(dst, '?');
+		} else if (bytes[i] >= 0x80 || bytes[i] == (cc_uint8)STRING_UNI_LEAD) {
+			if (dst->capacity - dst->length < STRING_UNI_BYTES) break;
+			String_Append(dst, (char)bytes[i]);
+		} else {
+			String_Append(dst, (char)bytes[i]);
+		}
+	}
+}
+
+int String_SplitPoint(const cc_string* str, int maxLen) {
+	int i;
+	if (maxLen >= str->length) return str->length;
+	if (maxLen <= 0) return 0;
+	for (i = max(0, maxLen - 3); i < maxLen; i++) {
+		if (str->buffer[i] == STRING_UNI_LEAD && i + String_CharLength(str, i) > maxLen) return i;
+	}
+	return maxLen;
+}
+
+int String_InsertCodepointAt(cc_string* str, int offset, cc_codepoint cp) {
+	char tmp[STRING_UNI_BYTES]; cc_string part; int len;
+	if (offset < 0 || offset > str->length) return 0;
+	len = String_AppendCodepoint(&(cc_string){ tmp, 0, STRING_UNI_BYTES }, cp);
+	if (!len || str->capacity - str->length < len) return 0;
+	part = String_Init(tmp, len, len);
+	{ int i; for (i = 0; i < len; i++) String_InsertRawAt(str, offset + i, part.buffer[i]); }
+	return part.length;
+}
+
+int String_DeleteCharAt(cc_string* str, int offset) {
+	int len = String_CharLength(str, offset), i;
+	if (!len) return 0;
+	for (i = offset; i + len < str->length; i++) str->buffer[i] = str->buffer[i + len];
+	str->length -= len;
+	str->buffer[str->length] = '\0';
+	return len;
+}
+
+int String_CharToUtf8(const cc_string* str, int* index, cc_uint8* data) {
+	int len; cc_codepoint cp;
+	if (*index < 0 || *index >= str->length) return 0;
+	cp = String_GetCodepoint(str, *index, &len);
+	*index += len;
+	return Convert_UnicodeToUtf8(cp, data);
+}
+
+int String_EncodeUtf8(void* data, const cc_string* src) {
+	cc_uint8* dst = (cc_uint8*)data;
+	int i, len = 0;
+	for (i = 0; i < src->length; ) len += String_CharToUtf8(src, &i, dst + len);
+	dst[len] = '\0';
+	return len;
+}
+
+int String_EncodeUtf16(void* data, const cc_string* src) {
+	cc_uint8* dst = (cc_uint8*)data;
+	int i, len = 0, bytes; cc_codepoint cp, unit;
+	for (i = 0; i < src->length; ) {
+		cp = String_GetCodepoint(src, i, &bytes); i += bytes;
+		if (cp <= 0xFFFF) {
+			unit = cp;
+			dst[len * 2] = (cc_uint8)unit;
+			dst[len * 2 + 1] = (cc_uint8)(unit >> 8);
+			len++;
+		} else {
+			cp -= 0x10000;
+			unit = (cc_uint16)(0xD800 | (cp >> 10));
+			dst[len * 2] = (cc_uint8)unit;
+			dst[len * 2 + 1] = (cc_uint8)(unit >> 8);
+			len++;
+			unit = (cc_uint16)(0xDC00 | (cp & 0x3FF));
+			dst[len * 2] = (cc_uint8)unit;
+			dst[len * 2 + 1] = (cc_uint8)(unit >> 8);
+			len++;
+		}
+	}
+	dst[len * 2] = dst[len * 2 + 1] = 0;
+	return len;
 }
 
 void String_AppendUtf16(cc_string* value, const void* data, int numBytes) {
 	const cc_unichar* chars = (const cc_unichar*)data;
-	int i; char c;
-	
-	for (i = 0; i < (numBytes >> 1); i++) {
-		/* TODO: UTF16 to codepoint conversion */
-		if (Convert_TryCodepointToCP437(chars[i], &c)) String_Append(value, c);
+	int i, count = numBytes / 2; cc_codepoint cp, high; 
+	for (i = 0; i < count; i++) {
+		cp = chars[i];
+		if (cp >= 0xD800 && cp <= 0xDBFF) {
+			if (i + 1 >= count) break;
+			high = cp;
+			if (chars[i + 1] < 0xDC00 || chars[i + 1] > 0xDFFF) continue;
+			cp = 0x10000 + ((high - 0xD800) << 10) + (chars[++i] - 0xDC00);
+		} else if (cp >= 0xDC00 && cp <= 0xDFFF) continue;
+		if (!String_AppendCodepoint(value, cp)) break;
 	}
 }
 
 void String_AppendUtf8(cc_string* value, const void* data, int numBytes) {
 	const cc_uint8* chars = (const cc_uint8*)data;
-	int len; cc_codepoint cp; char c;
-
-	for (; numBytes > 0; numBytes -= len) 
-	{
+	int len; cc_codepoint cp;
+	while (numBytes > 0) {
 		len = Convert_Utf8ToCodepoint(&cp, chars, numBytes);
 		if (!len) return;
-
-		if (Convert_TryCodepointToCP437(cp, &c)) String_Append(value, c);
-		chars += len;
+		if (String_IsValidCodepoint(cp) && !String_AppendCodepoint(value, cp)) return;
+		chars += len; numBytes -= len;
 	}
 }
 
 void String_AppendCP1252(cc_string* value, const void* data, int numBytes) {
+	static const cc_codepoint cp1252Ext[32] = {
+		0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+		0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+		0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+		0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178
+	};
 	const cc_uint8* chars = (const cc_uint8*)data;
-	int i; char c;
-
+	int i; cc_codepoint cp;
 	for (i = 0; i < numBytes; i++) {
-		if (Convert_TryCodepointToCP437(chars[i], &c)) String_Append(value, c);
+		cp = chars[i];
+		if (cp >= 0x80 && cp <= 0x9F) cp = cp1252Ext[cp - 0x80];
+		if (cp != 0xFFFD) String_AppendCodepoint(value, cp);
 	}
 }
-
-int String_EncodeUtf8(void* data, const cc_string* src) {
-	cc_uint8* dst = (cc_uint8*)data;
-	cc_uint8* cur;
-	int i, len = 0;
-	if (src->length > FILENAME_SIZE) Process_Abort("String too long to expand");
-
-	for (i = 0; i < src->length; i++) {
-		cur = dst + len;
-		len += Convert_CP437ToUtf8(src->buffer[i], cur);
-	}
-	dst[len] = '\0';
-	return len;
-}
-
 
 /*########################################################################################################################*
 *--------------------------------------------------Numerical conversions--------------------------------------------------*
@@ -955,33 +1144,32 @@ static cc_bool WordWrap_IsWrapper(char c) {
 }
 
 void WordWrap_Do(STRING_REF cc_string* text, cc_string* lines, int numLines, int lineLen) {
-	int i, lineStart, lineEnd;
-	for (i = 0; i < numLines; i++) { lines[i] = String_Empty; }
+	int i, lineStart, lineEnd, nextLineStart, chars, cutLen;
+	cc_bool foundWrapper;
+	for (i = 0; i < numLines; i++) lines[i] = String_Empty;
 
 	for (i = 0, lineStart = 0; i < numLines; i++) {
-		int nextLineStart = lineStart + lineLen;
-		/* No more text to wrap */
+		nextLineStart = lineStart;
+		for (chars = 0; chars < lineLen && nextLineStart < text->length; chars++) {
+			nextLineStart += String_CharLength(text, nextLineStart);
+		}
 		if (nextLineStart >= text->length) {
 			lines[i] = String_UNSAFE_SubstringAt(text, lineStart); return;
 		}
-
-		/* Find beginning of last word on current line */
-		for (lineEnd = nextLineStart; lineEnd >= lineStart; lineEnd--) {
-			if (WordWrap_IsWrapper(text->buffer[lineEnd])) break;
+		foundWrapper = false;
+		for (lineEnd = nextLineStart; lineEnd >= lineStart; ) {
+			if (lineEnd < text->length && WordWrap_IsWrapper(text->buffer[lineEnd])
+				&& String_CharLength(text, lineEnd) == 1) { foundWrapper = true; break; }
+			if (lineEnd == lineStart) break;
+			lineEnd -= String_CharLengthBefore(text, lineEnd);
 		}
-		lineEnd++; /* move after wrapper char (i.e. beginning of last word) */
-
+		if (!foundWrapper) lineEnd = lineStart - 1;
+		lineEnd++;
 		if (lineEnd <= lineStart || lineEnd >= nextLineStart) {
-			/* Three special cases handled by this: */
-			/* - Entire line is filled with a single word */
-			/* - Last character(s) on current line are wrapper characters */
-			/* - First character on next line is a wrapper character (last word ends at current line end) */
-			lines[i] = String_UNSAFE_Substring(text, lineStart, lineLen);
-			lineStart += lineLen;
+			cutLen = nextLineStart - lineStart;
+			lines[i] = String_UNSAFE_Substring(text, lineStart, cutLen);
+			lineStart = nextLineStart;
 		} else {
-			/* Last word in current line does not end in current line (extends onto next line) */
-			/* Trim current line to end at beginning of last word */
-			/* Set next line to start at beginning of last word */
 			lines[i] = String_UNSAFE_Substring(text, lineStart, lineEnd - lineStart);
 			lineStart = lineEnd;
 		}
@@ -992,11 +1180,9 @@ void WordWrap_GetCoords(int index, const cc_string* lines, int numLines, int* co
 	int y, offset = 0, lineLen;
 	if (index == -1) index = Int32_MaxValue;
 	*coordX = -1; *coordY = 0;
-
 	for (y = 0; y < numLines; y++) {
 		lineLen = lines[y].length;
 		if (!lineLen) break;
-
 		*coordY = y;
 		if (index < offset + lineLen) {
 			*coordX = index - offset; break;
@@ -1010,12 +1196,8 @@ int WordWrap_GetBackLength(const cc_string* text, int index) {
 	int start = index;
 	if (index <= 0) return 0;
 	if (index >= text->length) Process_Abort("WordWrap_GetBackLength - index past end of string");
-	
-	/* Go backward to the end of the previous word */
-	while (index > 0 && text->buffer[index] == ' ') index--;
-	/* Go backward to the start of the current word */
-	while (index > 0 && text->buffer[index] != ' ') index--;
-
+	while (index > 0 && text->buffer[index] == ' ') index -= String_CharLengthBefore(text, index);
+	while (index > 0 && text->buffer[index] != ' ') index -= String_CharLengthBefore(text, index);
 	return start - index;
 }
 
@@ -1023,11 +1205,7 @@ int WordWrap_GetForwardLength(const cc_string* text, int index) {
 	int start = index, length = text->length;
 	if (index == -1) return 0;
 	if (index >= text->length) Process_Abort("WordWrap_GetForwardLength - index past end of string");
-
-	/* Go forward to the end of the word 'index' is currently in */
-	while (index < length && text->buffer[index] != ' ') index++;
-	/* Go forward to the start of the next word after 'index' */
-	while (index < length && text->buffer[index] == ' ') index++;
-
+	while (index < length && text->buffer[index] != ' ') index += String_CharLength(text, index);
+	while (index < length && text->buffer[index] == ' ') index += String_CharLength(text, index);
 	return index - start;
 }

@@ -466,7 +466,7 @@ CC_NOINLINE static void DeleteSkin(struct Entity* e) {
 }
 
 void Entity_SetSkin(struct Entity* e, const cc_string* skin) {
-	cc_string tmp; char tmpBuffer[STRING_SIZE];
+	cc_string tmp; char tmpBuffer[STRING_SIZE * 4];
 	DeleteSkin(e);
 
 	if (Utils_IsUrlPrefix(skin)) {
@@ -618,7 +618,7 @@ void TabList_Set(EntityID id, const cc_string* player_, const cc_string* list, c
 
 	/* Player name shouldn't have colour codes */
 	/*  (intended for e.g. tab autocomplete) */
-	cc_string player; char playerBuffer[STRING_SIZE];
+	cc_string player; char playerBuffer[STRING_SIZE * 4];
 	String_InitArray(player, playerBuffer);
 	String_AppendColorless(&player, player_);
 	

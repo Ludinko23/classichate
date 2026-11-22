@@ -212,6 +212,27 @@ CC_API void String_AppendCP1252(cc_string* str, const void* data, int numBytes);
 /* Returns the number of bytes written, excluding trailing NULL terminator. */
 CC_API int String_EncodeUtf8(void* data, const cc_string* src);
 
+/* Unicode-aware internal strings:
+   ASCII remains one byte. Non-ASCII codepoints (including CP437 characters)
+   use a 4-byte escape: 01, (80 | bits 20..14), (80 | bits 13..7), (80 | bits 6..0).
+   The high bits on payload bytes keep them distinct from ASCII/control bytes. */
+#define STRING_UNI_LEAD  '\1'
+#define STRING_UNI_BYTES 4
+CC_API cc_bool String_IsValidCodepoint(cc_codepoint cp);
+CC_API int String_AppendCodepoint(cc_string* str, cc_codepoint cp);
+CC_API int String_CharLength(const cc_string* str, int index);
+CC_API int String_CharLengthBefore(const cc_string* str, int index);
+CC_API cc_codepoint String_GetCodepoint(const cc_string* str, int index, int* len);
+CC_API cc_bool String_HasUnicode(const cc_string* str);
+CC_API void String_AppendCP437Only(cc_string* dst, const cc_string* src);
+/* Appends legacy CP437 bytes while converting them to internal Unicode. */
+CC_API void String_AppendCP437(cc_string* dst, const void* data, int numBytes);
+CC_API int String_SplitPoint(const cc_string* str, int maxLen);
+CC_API int String_InsertCodepointAt(cc_string* str, int offset, cc_codepoint cp);
+CC_API int String_DeleteCharAt(cc_string* str, int offset);
+CC_API int String_CharToUtf8(const cc_string* str, int* index, cc_uint8* data);
+CC_API int String_EncodeUtf16(void* data, const cc_string* src);
+
 /* Attempts to convert the given string into an unsigned 8 bit integer. */
 CC_API cc_bool Convert_ParseUInt8(const cc_string*  str, cc_uint8* value);
 /* Attempts to convert the given string into an unsigned 16 bit integer. */

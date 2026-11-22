@@ -284,7 +284,7 @@ static GfxResourceID names_VB;
 #define NAME_OFFSET 3 /* offset of back layer of name above an entity */
 
 static void MakeNameTexture(struct Entity* e) {
-	cc_string colorlessName; char colorlessBuffer[STRING_SIZE];
+	cc_string colorlessName; char colorlessBuffer[STRING_SIZE * 4];
 	BitmapCol shadowColor = BitmapCol_Make(80, 80, 80, 255);
 	BitmapCol origWhiteColor;
 

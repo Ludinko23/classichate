@@ -838,6 +838,7 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	struct Screen* s;
 	cc_bool triggered;
 	int i;
+
 	if (Input.DownHook && Input.DownHook(key, device)) return;
 
 #ifndef CC_BUILD_WEB
@@ -853,35 +854,44 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	} else if (InputBind_Claims(BIND_SCREENSHOT, key, device) && !was) {
 		Game_ScreenshotRequested = true; return;
 	}
-	
+
+	/*
+	 * WinCE sends ALT+? as the '?' character.
+	 * We intentionally handle '?' here even if a text input is active.
+	 */
+#ifdef CC_BUILD_WINCE
+	/* WinCE keyboard: pressing '.' opens the pause menu. */
+	if (!was && key == CCKEY_PERIOD) {
+		Gui_ShowPauseMenu();
+		return;
+	}
+#endif
+
 	triggered = false;
 	for (i = 0; !was && i < BIND_COUNT; i++)
 	{
 		if (!InputBind_Claims(i, key, device)) continue;
 		Bind_IsTriggered[i] |= device->type;
 
-		if (!Bind_OnTriggered[i])              continue;
+		if (!Bind_OnTriggered[i]) continue;
 		triggered |= Bind_OnTriggered[i](key, device);
 	}
-	
-	for (i = 0; i < Gui.ScreensCount; i++) 
+
+	for (i = 0; i < Gui.ScreensCount; i++)
 	{
 		s = Gui_Screens[i];
 		s->dirty = true;
 		if (s->VTABLE->HandlesInputDown(s, key, device)) return;
 	}
+
 	if (Gui.InputGrab) return;
 
 	if (InputDevice_IsPause(key, device)) {
 #ifdef CC_BUILD_WEB
-		/* Can't do this in KeyUp, because pressing escape without having */
-		/* explicitly disabled mouse lock means a KeyUp event isn't sent. */
-		/* But switching to pause screen disables mouse lock, causing a KeyUp */
-		/* event to be sent, triggering the active->closable case which immediately */
-		/* closes the pause screen. Hence why the next KeyUp must be supressed. */
 		suppressEscape = true;
 #endif
-		Gui_ShowPauseMenu(); return;
+		Gui_ShowPauseMenu();
+		return;
 	}
 
 	/* Hotkeys should not be triggered multiple times when holding down */
@@ -891,7 +901,9 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	} else if (key == CCKEY_F5 && Game_ClassicMode) {
 		int weather = Env.Weather == WEATHER_SUNNY ? WEATHER_RAINY : WEATHER_SUNNY;
 		Env_SetWeather(weather);
-	} else { HandleHotkeyDown(key); }
+	} else {
+		HandleHotkeyDown(key);
+	}
 }
 
 static void OnInputDownLegacy(void* obj, int key, cc_bool was, struct InputDevice* device) {

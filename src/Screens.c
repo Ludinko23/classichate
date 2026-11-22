@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "Screens.h"
 #include "Widgets.h"
 #include "Game.h"
@@ -458,7 +459,7 @@ static struct TabListOverlay {
 #define TABLIST_MAX_VERTICES (TEXTWIDGET_MAX + 4 * TABLIST_MAX_ENTRIES)
 
 static void TabListOverlay_DrawText(struct Texture* tex, struct TabListOverlay* s, const cc_string* name) {
-	cc_string tmp; char tmpBuffer[STRING_SIZE];
+	cc_string tmp; char tmpBuffer[STRING_SIZE * 4];
 	struct DrawTextArgs args;
 
 	if (Game_PureClassic) {
@@ -616,8 +617,8 @@ static int TabListOverlay_GetGroupCount(struct TabListOverlay* s, int id, int i)
 }
 
 static int TabListOverlay_PlayerCompare(int x, int y) {
-	cc_string xName; char xNameBuffer[STRING_SIZE];
-	cc_string yName; char yNameBuffer[STRING_SIZE];
+	cc_string xName; char xNameBuffer[STRING_SIZE * 4];
+	cc_string yName; char yNameBuffer[STRING_SIZE * 4];
 	cc_uint8 xRank, yRank;
 	cc_string xNameRaw, yNameRaw;
 
@@ -1211,6 +1212,21 @@ static int ChatScreen_KeyPress(void* screen, char keyChar) {
 	return true;
 }
 
+static int ChatScreen_UnicodeKeyPress(void* screen, cc_codepoint cp) {
+	struct ChatScreen* s = (struct ChatScreen*)screen;
+	char buffer[STRING_UNI_BYTES];
+	cc_string text;
+	if (!s->grabsInput) return false;
+	if (s->suppressNextPress) {
+		s->suppressNextPress = false;
+		return true;
+	}
+	String_InitArray(text, buffer);
+	if (!String_AppendCodepoint(&text, cp)) return false;
+	InputWidget_AppendText(&s->input.base, &text);
+	return true;
+}
+
 static int ChatScreen_TextChanged(void* screen, const cc_string* str) {
 	struct ChatScreen* s = (struct ChatScreen*)screen;
 	if (!s->grabsInput) return false;
@@ -1417,7 +1433,8 @@ static const struct ScreenVTABLE ChatScreen_VTABLE = {
 	ChatScreen_Render,      ChatScreen_BuildMesh,
 	ChatScreen_KeyDown,     ChatScreen_KeyUp,  ChatScreen_KeyPress, ChatScreen_TextChanged,
 	ChatScreen_PointerDown, Screen_PointerUp,  Screen_FPointer,     ChatScreen_MouseScroll,
-	ChatScreen_Layout, ChatScreen_ContextLost, ChatScreen_ContextRecreated
+	ChatScreen_Layout, ChatScreen_ContextLost, ChatScreen_ContextRecreated,
+	NULL, ChatScreen_UnicodeKeyPress
 };
 void ChatScreen_Show(void) {
 	struct ChatScreen* s  = &ChatScreen_Instance;
@@ -1556,13 +1573,13 @@ static void SpecialTextScreen_ChatReceived(void* screen, const cc_string* msg, i
 		TextGroupWidget_Redraw(&s->bottomRight, 2 - (type - MSG_TYPE_BOTTOMRIGHT_1));
 		s->dirty = true;
 	} else if (type == MSG_TYPE_ANNOUNCEMENT) {
-		TextWidget_Set(&s->announcement, msg, &s->announcementFont);
+		TextWidget_SetRaw(&s->announcement, msg, &s->announcementFont);
 		s->dirty = true;
 	} else if (type == MSG_TYPE_BIGANNOUNCEMENT) {
-		TextWidget_Set(&s->bigAnnouncement, msg, &s->bigAnnouncementFont);
+		TextWidget_SetRaw(&s->bigAnnouncement, msg, &s->bigAnnouncementFont);
 		s->dirty = true;
 	} else if (type == MSG_TYPE_SMALLANNOUNCEMENT) {
-		TextWidget_Set(&s->smallAnnouncement, msg, &s->smallAnnouncementFont);
+		TextWidget_SetRaw(&s->smallAnnouncement, msg, &s->smallAnnouncementFont);
 		s->dirty = true;
 	} else if (type >= MSG_TYPE_EXTRASTATUS_1 && type <= MSG_TYPE_EXTRASTATUS_2) {
 		/* Status[0] is for texture pack downloading message */
@@ -1573,9 +1590,9 @@ static void SpecialTextScreen_ChatReceived(void* screen, const cc_string* msg, i
 }
 
 static void SpecialTextScreen_Redraw(struct SpecialTextScreen* s) {
-	TextWidget_Set(&s->announcement,      &Chat_Announcement, &s->announcementFont);
-	TextWidget_Set(&s->bigAnnouncement,   &Chat_BigAnnouncement, &s->bigAnnouncementFont);
-	TextWidget_Set(&s->smallAnnouncement, &Chat_SmallAnnouncement, &s->smallAnnouncementFont);
+	TextWidget_SetRaw(&s->announcement,      &Chat_Announcement, &s->announcementFont);
+	TextWidget_SetRaw(&s->bigAnnouncement,   &Chat_BigAnnouncement, &s->bigAnnouncementFont);
+	TextWidget_SetRaw(&s->smallAnnouncement, &Chat_SmallAnnouncement, &s->smallAnnouncementFont);
 
 	TextGroupWidget_RedrawAll(&s->status);
 	TextGroupWidget_RedrawAll(&s->bottomRight);
@@ -1739,7 +1756,7 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block) {
 }
 
 static void InventoryScreen_UpdateTitle(struct InventoryScreen* s, BlockID block) {
-	cc_string desc; char descBuffer[STRING_SIZE * 2];
+	cc_string desc; char descBuffer[STRING_SIZE * 8];
 
 	String_InitArray(desc, descBuffer);
 	InventoryScreen_GetTitleText(&desc, block);
@@ -1973,8 +1990,8 @@ static struct LoadingScreen {
 	cc_string titleStr, messageStr;
 	const char* lastState;
 
-	char _titleBuffer[STRING_SIZE];
-	char _messageBuffer[STRING_SIZE];
+	char _titleBuffer[STRING_SIZE * 4];
+	char _messageBuffer[STRING_SIZE * 4];
 	struct Widget* __widgets[2];
 } LoadingScreen CC_BIG_VAR;
 #define LOADING_TILE_SIZE 64
@@ -2208,7 +2225,7 @@ static struct DisconnectScreen {
 
 	struct FontDesc titleFont, messageFont;
 	struct TextWidget title, message;
-	char _titleBuffer[STRING_SIZE * 2];
+	char _titleBuffer[STRING_SIZE * 4];
 	char _messageBuffer[STRING_SIZE];
 	cc_string titleStr, messageStr;
 	struct Widget* __widgets[4];
@@ -2225,7 +2242,7 @@ static void DisconnectScreen_Layout(void* screen) {
 }
 
 static void DisconnectScreen_UpdateReconnect(struct DisconnectScreen* s) {
-	cc_string msg; char msgBuffer[STRING_SIZE];
+	cc_string msg; char msgBuffer[STRING_SIZE * 4];
 	int secsLeft;
 	String_InitArray(msg, msgBuffer);
 
@@ -2233,12 +2250,12 @@ static void DisconnectScreen_UpdateReconnect(struct DisconnectScreen* s) {
 		secsLeft = Math_Ceil(s->delayLeft);
 
 		if (secsLeft > 0) {
-			String_Format1(&msg, "Reconnect in %i", &secsLeft);
+			String_Format1(&msg, Lang_Get("Reconnect in %i"), &secsLeft);
 		}
 		Widget_SetDisabled(&s->reconnect, secsLeft > 0);
 	}
 
-	if (!msg.length) String_AppendConst(&msg, "Reconnect");
+	if (!msg.length) Lang_AppendTo(&msg, "Reconnect");
 	ButtonWidget_Set(&s->reconnect, &msg, &s->titleFont);
 }
 
@@ -2329,7 +2346,7 @@ static const struct ScreenVTABLE DisconnectScreen_VTABLE = {
 void DisconnectScreen_Show(const cc_string* title, const cc_string* message) {
 	static const cc_string kick = String_FromConst("Kicked ");
 	static const cc_string ban  = String_FromConst("Banned ");
-	cc_string why; char whyBuffer[STRING_SIZE];
+	cc_string why; char whyBuffer[STRING_SIZE * 8];
 	struct DisconnectScreen* s = &DisconnectScreen;
 	int i;
 

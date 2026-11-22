@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "Widgets.h"
 #include "Graphics.h"
 #include "Drawer2D.h"
@@ -31,6 +32,31 @@ static void AddWidget(void* screen, void* w) {
 
 	if (s->numWidgets >= s->maxWidgets) Process_Abort("Tried to add too many widgets to screen");
 	s->widgets[s->numWidgets++] = (struct Widget*)w;
+}
+
+static cc_uint64 InventoryRainbowStart;
+
+static cc_uint64 Inventory_RainbowTime(void) {
+	if (!InventoryRainbowStart) InventoryRainbowStart = Stopwatch_Measure();
+	return Stopwatch_ElapsedMS(InventoryRainbowStart, Stopwatch_Measure());
+}
+
+static PackedCol Inventory_RainbowColor(float offset, cc_uint8 alpha) {
+	float hue = Math_Mod1((float)Inventory_RainbowTime() / 7000.0f + offset) * 6.0f;
+	int sector = (int)hue;
+	float frac = hue - sector;
+	float r = 0, g = 0, b = 0;
+	float q = 1.0f - frac;
+
+	switch (sector) {
+	case 0: r = 1.0f; g = frac;  b = 0.0f; break;
+	case 1: r = q;    g = 1.0f;  b = 0.0f; break;
+	case 2: r = 0.0f; g = 1.0f;  b = frac; break;
+	case 3: r = 0.0f; g = q;     b = 1.0f; break;
+	case 4: r = frac; g = 0.0f;  b = 1.0f; break;
+	default: r = 1.0f; g = 0.0f;  b = q;    break;
+	}
+	return PackedCol_Make((cc_uint8)(r * 255), (cc_uint8)(g * 255), (cc_uint8)(b * 255), alpha);
 }
 
 /*########################################################################################################################*
@@ -86,6 +112,14 @@ void TextWidget_Add(void* screen, struct TextWidget* w) {
 }
 
 void TextWidget_Set(struct TextWidget* w, const cc_string* text, struct FontDesc* font) {
+	/* Every label is run through the translation table - text with no translation is shown as-is */
+	cc_string tr; char trBuffer[1024];
+	String_InitArray(tr, trBuffer);
+	if (Lang_Translate(text, &tr)) text = &tr;
+	TextWidget_SetRaw(w, text, font);
+}
+
+void TextWidget_SetRaw(struct TextWidget* w, const cc_string* text, struct FontDesc* font) {
 	struct DrawTextArgs args;
 	Gfx_DeleteTexture(&w->tex.ID);
 	DrawTextArgs_Make(&args, text, font, true);
@@ -102,7 +136,7 @@ void TextWidget_Set(struct TextWidget* w, const cc_string* text, struct FontDesc
 
 void TextWidget_SetConst(struct TextWidget* w, const char* text, struct FontDesc* font) {
 	cc_string str = String_FromReadonly(text);
-	TextWidget_Set(w, &str, font);
+	TextWidget_Set(w, &str, font); /* translates */
 }
 
 
@@ -251,6 +285,14 @@ void ButtonWidget_Add(void* screen, struct ButtonWidget* w, int minWidth, Widget
 }
 
 void ButtonWidget_Set(struct ButtonWidget* w, const cc_string* text, struct FontDesc* font) {
+	/* Every button is run through the translation table - text with no translation is shown as-is */
+	cc_string tr; char trBuffer[1024];
+	String_InitArray(tr, trBuffer);
+	if (Lang_Translate(text, &tr)) text = &tr;
+	ButtonWidget_SetRaw(w, text, font);
+}
+
+void ButtonWidget_SetRaw(struct ButtonWidget* w, const cc_string* text, struct FontDesc* font) {
 	struct DrawTextArgs args;
 	Gfx_DeleteTexture(&w->tex.ID);
 	DrawTextArgs_Make(&args, text, font, true);
@@ -265,7 +307,7 @@ void ButtonWidget_Set(struct ButtonWidget* w, const cc_string* text, struct Font
 
 void ButtonWidget_SetConst(struct ButtonWidget* w, const char* text, struct FontDesc* font) {
 	cc_string str = String_FromReadonly(text);
-	ButtonWidget_Set(w, &str, font);
+	ButtonWidget_Set(w, &str, font); /* translates */
 }
 
 
@@ -820,10 +862,25 @@ static int TableWidget_Render2(void* widget, int offset) {
 	/* These were sourced by taking a screenshot of vanilla */
 	/* Then using paint to extract the color components */
 	/* Then using wolfram alpha to solve the glblendfunc equation */
-	PackedCol topBackColor    = PackedCol_Make( 34,  34,  34, 168);
-	PackedCol bottomBackColor = PackedCol_Make( 57,  57, 104, 202);
-	PackedCol topSelColor     = PackedCol_Make(255, 255, 255, 142);
-	PackedCol bottomSelColor  = PackedCol_Make(255, 255, 255, 192);
+	cc_bool transparent = Gui.TransparentInventory;
+	cc_bool rainbow     = Gui.RainbowInventory;
+	PackedCol topBackColor, bottomBackColor, topSelColor, bottomSelColor;
+	cc_uint8 backTopA = transparent ? 72  : 168;
+	cc_uint8 backBotA = transparent ? 100 : 202;
+	cc_uint8 selTopA  = transparent ? 72  : 142;
+	cc_uint8 selBotA  = transparent ? 100 : 192;
+
+	if (rainbow) {
+		topBackColor    = Inventory_RainbowColor(0.00f, backTopA);
+		bottomBackColor = Inventory_RainbowColor(0.12f, backBotA);
+		topSelColor     = Inventory_RainbowColor(0.48f, selTopA);
+		bottomSelColor  = Inventory_RainbowColor(0.62f, selBotA);
+	} else {
+		topBackColor    = PackedCol_Make( 34,  34,  34, backTopA);
+		bottomBackColor = PackedCol_Make( 57,  57, 104, backBotA);
+		topSelColor     = PackedCol_Make(255, 255, 255, selTopA);
+		bottomSelColor  = PackedCol_Make(255, 255, 255, selBotA);
+	}
 
 	Gfx_Draw2DGradient(Table_X(w), Table_Y(w),
 		Table_Width(w), Table_Height(w), topBackColor, bottomBackColor);
@@ -1095,15 +1152,28 @@ static void InputWidget_FormatLine(struct InputWidget* w, int i, cc_string* line
 	cc_string src = w->lines[i];
 	if (!w->convertPercents) { String_AppendString(line, &src); return; }
 
-	for (i = 0; i < src.length; i++) {
-		char c = src.buffer[i];
-		if (c == '%' && Drawer2D_ValidColorCodeAt(&src, i + 1)) { c = '&'; }
-		String_Append(line, c);
+	for (i = 0; i < src.length; ) {
+		int len = String_CharLength(&src, i);
+		if (len > 1) {
+			/* Internal Unicode escape (lead byte + continuation bytes).
+			   Must be copied as a whole - appending the raw bytes one at a time
+			   with String_Append would reinterpret them as CP437 characters */
+			cc_string part = String_UNSAFE_Substring(&src, i, len);
+			String_AppendString(line, &part);
+			i += len; continue;
+		}
+
+		{
+			char c = src.buffer[i];
+			if (c == '%' && Drawer2D_ValidColorCodeAt(&src, i + 1)) { c = '&'; }
+			String_Append(line, c);
+		}
+		i++;
 	}
 }
 
 static void InputWidget_CalculateLineSizes(struct InputWidget* w) {
-	cc_string line; char lineBuffer[STRING_SIZE];
+	cc_string line; char lineBuffer[STRING_SIZE * 4 + 16];
 	struct DrawTextArgs args;
 	int y;
 
@@ -1124,7 +1194,7 @@ static void InputWidget_CalculateLineSizes(struct InputWidget* w) {
 }
 
 static char InputWidget_GetLastCol(struct InputWidget* w, int x, int y) {
-	cc_string line; char lineBuffer[STRING_SIZE];
+	cc_string line; char lineBuffer[STRING_SIZE * 4 + 16];
 	char col;
 	String_InitArray(line, lineBuffer);
 
@@ -1139,10 +1209,28 @@ static char InputWidget_GetLastCol(struct InputWidget* w, int x, int y) {
 	return '\0';
 }
 
+static int InputWidget_CountChars(const cc_string* text) {
+	int i, count = 0;
+	for (i = 0; i < text->length; i += String_CharLength(text, i)) count++;
+	return count;
+}
+
+static cc_bool TextInputWidget_AllowedChar(void* widget, char c);
+
+static cc_bool InputWidget_AllowedUnicode(struct InputWidget* w, cc_codepoint cp) {
+	if (!String_IsValidCodepoint(cp)) return false;
+	if (w->AllowedChar == TextInputWidget_AllowedChar) {
+		struct TextInputWidget* tw = (struct TextInputWidget*)w;
+		if (tw->desc.VTABLE != &StringInput_VTABLE && tw->desc.VTABLE != &PathInput_VTABLE) return false;
+		return InputWidget_CountChars(&w->text) < w->GetMaxLines() * INPUTWIDGET_LEN;
+	}
+	return w->AllowedChar(w, 'a');
+}
+
 static void InputWidget_UpdateCaret(struct InputWidget* w) {
 	static const cc_string caret = String_FromConst("_");
 	BitmapCol col;
-	cc_string line; char lineBuffer[STRING_SIZE];
+	cc_string line; char lineBuffer[STRING_SIZE * 4 + 16];
 	struct DrawTextArgs args;
 	int maxChars, lineWidth;
 	char colCode;
@@ -1153,7 +1241,7 @@ static void InputWidget_UpdateCaret(struct InputWidget* w) {
 		w->caretWidth = (cc_uint16)((w->caretTex.width * 3) / 4);
 	}
 	
-	maxChars = w->GetMaxLines() * INPUTWIDGET_LEN;
+	maxChars = w->text.capacity;
 	if (w->caretPos >= maxChars) w->caretPos = -1;
 	WordWrap_GetCoords(w->caretPos, w->lines, w->GetMaxLines(), &w->caretX, &w->caretY);
 
@@ -1162,7 +1250,7 @@ static void InputWidget_UpdateCaret(struct InputWidget* w) {
 	w->caretTex.width   = w->caretWidth;
 
 	/* Caret is at last character on line */
-	if (w->caretX == INPUTWIDGET_LEN) {
+	if (w->caretX >= w->lines[w->caretY].length) {
 		lineWidth = w->lineWidths[w->caretY];	
 	} else {
 		String_InitArray(line, lineBuffer);
@@ -1173,7 +1261,7 @@ static void InputWidget_UpdateCaret(struct InputWidget* w) {
 		if (w->caretY == 0) lineWidth += w->prefixWidth;
 
 		if (w->caretX < line.length) {
-			args.text = String_UNSAFE_Substring(&line, w->caretX, 1);
+			args.text = String_UNSAFE_Substring(&line, w->caretX, String_CharLength(&line, w->caretX));
 			args.useShadow = true;
 			w->caretTex.width = Drawer2D_TextWidth(&args);
 		}
@@ -1227,18 +1315,24 @@ static cc_bool InputWidget_AllowedChar(void* widget, char c) {
 }
 
 static void InputWidget_AppendChar(struct InputWidget* w, char c) {
-	if (w->caretPos == -1) {
-		String_InsertAt(&w->text, w->text.length, c);
+	int offset = w->caretPos == -1 ? w->text.length : w->caretPos;
+	int inserted = 1;
+	if ((cc_uint8)c >= 0x80 || (cc_uint8)c == (cc_uint8)STRING_UNI_LEAD) {
+		inserted = String_InsertCodepointAt(&w->text, offset, Convert_CP437ToUnicode(c));
 	} else {
-		String_InsertAt(&w->text, w->caretPos, c);
-		w->caretPos++;
-		if (w->caretPos >= w->text.length) { w->caretPos = -1; }
+		String_InsertAt(&w->text, offset, c);
+	}
+	if (w->caretPos != -1) {
+		w->caretPos += inserted;
+		if (w->caretPos >= w->text.length) w->caretPos = -1;
 	}
 }
 
 static cc_bool InputWidget_TryAppendChar(struct InputWidget* w, char c) {
 	int maxChars = w->GetMaxLines() * INPUTWIDGET_LEN;
-	if (w->text.length >= maxChars) return false;
+	if (InputWidget_CountChars(&w->text) >= maxChars || w->text.length >= w->text.capacity) return false;
+	if (((cc_uint8)c >= 0x80 || (cc_uint8)c == (cc_uint8)STRING_UNI_LEAD)
+		&& w->text.capacity - w->text.length < STRING_UNI_BYTES) return false;
 	if (!w->AllowedChar(w, c)) return false;
 
 	InputWidget_AppendChar(w, c);
@@ -1246,9 +1340,27 @@ static cc_bool InputWidget_TryAppendChar(struct InputWidget* w, char c) {
 }
 
 static int InputWidget_DoAppendText(struct InputWidget* w, const cc_string* text) {
-	int i, appended = 0;
-	for (i = 0; i < text->length; i++) {
-		if (InputWidget_TryAppendChar(w, text->buffer[i])) appended++;
+	int i, appended = 0, srcLen, inserted, maxChars, offset, chars;
+	cc_codepoint cp;
+	maxChars = w->GetMaxLines() * INPUTWIDGET_LEN;
+	chars = InputWidget_CountChars(&w->text);
+	for (i = 0; i < text->length; i += srcLen) {
+		cp = String_GetCodepoint(text, i, &srcLen);
+		if (!srcLen) break;
+		if (chars >= maxChars) break;
+		if (srcLen == 1) {
+			if (InputWidget_TryAppendChar(w, text->buffer[i])) { appended++; chars++; }
+			continue;
+		}
+		if (w->text.length + srcLen > w->text.capacity || !InputWidget_AllowedUnicode(w, cp)) continue;
+		offset = w->caretPos == -1 ? w->text.length : w->caretPos;
+		inserted = String_InsertCodepointAt(&w->text, offset, cp);
+		if (!inserted) continue;
+		if (w->caretPos != -1) {
+			w->caretPos += inserted;
+			if (w->caretPos >= w->text.length) w->caretPos = -1;
+		}
+		appended++; chars++;
 	}
 	return appended;
 }
@@ -1264,29 +1376,40 @@ void InputWidget_Append(struct InputWidget* w, char c) {
 }
 
 static void InputWidget_DeleteChar(struct InputWidget* w) {
+	int len;
 	if (!w->text.length) return;
-
 	if (w->caretPos == -1) {
-		String_DeleteAt(&w->text, w->text.length - 1);
+		len = String_CharLengthBefore(&w->text, w->text.length);
+		String_DeleteCharAt(&w->text, w->text.length - len);
 	} else if (w->caretPos > 0) {
-		w->caretPos--;
-		String_DeleteAt(&w->text, w->caretPos);
+		len = String_CharLengthBefore(&w->text, w->caretPos);
+		w->caretPos -= len;
+		String_DeleteCharAt(&w->text, w->caretPos);
 	}
 }
 
 static void InputWidget_BackspaceKey(struct InputWidget* w) {
-	int i, len;
+	int len;
 
 	if (Input_IsActionPressed()) {
-		if (w->caretPos == -1) { w->caretPos = w->text.length - 1; }
+		if (w->caretPos == -1) { w->caretPos = w->text.length - String_CharLengthBefore(&w->text, w->text.length); }
 		len = WordWrap_GetBackLength(&w->text, w->caretPos);
 		if (!len) return;
-
-		w->caretPos -= len;
+		{
+			int currentLen = String_CharLength(&w->text, w->caretPos);
+			w->caretPos -= len;
+			len += currentLen;
+		}
 		if (w->caretPos < 0) { w->caretPos = 0; }
 
-		for (i = 0; i <= len; i++) {
-			String_DeleteAt(&w->text, w->caretPos);
+		{
+			int deleted = 0, charLen;
+			int deleteBytes = len;
+			while (deleted < deleteBytes && w->caretPos < w->text.length) {
+				charLen = String_DeleteCharAt(&w->text, w->caretPos);
+				if (!charLen) break;
+				deleted += charLen;
+			}
 		}
 
 		if (w->caretPos >= w->text.length) { w->caretPos = -1; }
@@ -1304,7 +1427,7 @@ static void InputWidget_BackspaceKey(struct InputWidget* w) {
 
 static void InputWidget_DeleteKey(struct InputWidget* w) {
 	if (w->text.length > 0 && w->caretPos != -1) {
-		String_DeleteAt(&w->text, w->caretPos);
+		String_DeleteCharAt(&w->text, w->caretPos);
 		if (w->caretPos >= w->text.length) { w->caretPos = -1; }
 		InputWidget_UpdateText(w);
 	}
@@ -1312,7 +1435,7 @@ static void InputWidget_DeleteKey(struct InputWidget* w) {
 
 static void InputWidget_LeftKey(struct InputWidget* w) {
 	if (Input_IsActionPressed()) {
-		if (w->caretPos == -1) { w->caretPos = w->text.length - 1; }
+		if (w->caretPos == -1) { w->caretPos = w->text.length - String_CharLengthBefore(&w->text, w->text.length); }
 		w->caretPos -= WordWrap_GetBackLength(&w->text, w->caretPos);
 		InputWidget_UpdateCaret(w);
 		return;
@@ -1320,7 +1443,7 @@ static void InputWidget_LeftKey(struct InputWidget* w) {
 
 	if (w->text.length > 0) {
 		if (w->caretPos == -1) { w->caretPos = w->text.length; }
-		w->caretPos--;
+		w->caretPos -= String_CharLengthBefore(&w->text, w->caretPos);
 		if (w->caretPos < 0) { w->caretPos = 0; }
 		InputWidget_UpdateCaret(w);
 	}
@@ -1335,7 +1458,7 @@ static void InputWidget_RightKey(struct InputWidget* w) {
 	}
 
 	if (w->text.length > 0 && w->caretPos != -1) {
-		w->caretPos++;
+		w->caretPos += String_CharLength(&w->text, w->caretPos);
 		if (w->caretPos >= w->text.length) { w->caretPos = -1; }
 		InputWidget_UpdateCaret(w);
 	}
@@ -1362,7 +1485,7 @@ static void InputWidget_CopyFromClipboard(struct InputWidget* w) {
 
 static cc_bool InputWidget_OtherKey(struct InputWidget* w, int key) {
 	int maxChars = w->GetMaxLines() * INPUTWIDGET_LEN;
-	if (key == INPUT_CLIPBOARD_PASTE && w->text.length < maxChars) {
+	if (key == INPUT_CLIPBOARD_PASTE && InputWidget_CountChars(&w->text) < maxChars) {
 		InputWidget_CopyFromClipboard(w);
 		return true;
 	} else if (key == INPUT_CLIPBOARD_COPY) {
@@ -1431,7 +1554,7 @@ static int InputWidget_KeyDown(void* widget, int key, struct InputDevice* device
 }
 
 static int InputWidget_PointerDown(void* widget, int id, int x, int y) {
-	cc_string line; char lineBuffer[STRING_SIZE];
+	cc_string line; char lineBuffer[STRING_SIZE * 4 + 16];
 	struct InputWidget* w = (struct InputWidget*)widget;
 	struct DrawTextArgs args;
 	int cx, cy, offset = 0;
@@ -1447,19 +1570,20 @@ static int InputWidget_PointerDown(void* widget, int id, int x, int y) {
 		InputWidget_FormatLine(w, cy, &line);
 		if (!line.length) continue;
 
-		for (cx = 0; cx < line.length; cx++) {
+		for (cx = 0; cx < line.length; ) {
+			int charLen = String_CharLength(&line, cx);
 			args.text = String_UNSAFE_Substring(&line, 0, cx);
 			charX     = Drawer2D_TextWidth(&args);
 			if (cy == 0) charX += w->prefixWidth;
 
-			args.text = String_UNSAFE_Substring(&line, cx, 1);
+			args.text = String_UNSAFE_Substring(&line, cx, charLen);
 			charWidth = Drawer2D_TextWidth(&args);
-
 			if (Gui_Contains(charX, cy * charHeight, charWidth, charHeight, x, y)) {
 				w->caretPos = offset + cx;
 				InputWidget_UpdateCaret(w);
 				return TOUCH_TYPE_GUI;
 			}
+			cx += charLen;
 		}
 		offset += line.length;
 	}
@@ -1591,7 +1715,7 @@ static cc_bool String_ValidChar(struct MenuInputDesc* d, char c) {
 }
 
 static cc_bool String_ValidString(struct MenuInputDesc* d, const cc_string* s) {
-	return s->length <= STRING_SIZE;
+	return InputWidget_CountChars(s) <= STRING_SIZE;
 }
 
 const struct MenuInputVTABLE StringInput_VTABLE = {
@@ -1690,7 +1814,7 @@ static cc_bool TextInputWidget_AllowedChar(void* widget, char c) {
 
 	if (!desc->VTABLE->IsValidChar(desc, c)) return false;
 	maxChars = w->GetMaxLines() * INPUTWIDGET_LEN;
-	if (w->text.length == maxChars) return false;
+	if (InputWidget_CountChars(&w->text) >= maxChars) return false;
 
 	/* See if the new string is in valid format */
 	InputWidget_AppendChar(w, c);
@@ -1777,7 +1901,7 @@ void TextInputWidget_SetFont(struct TextInputWidget* w, struct FontDesc* font) {
 static const cc_string chatInputPrefix = String_FromConst("> ");
 
 static void ChatInputWidget_MakeTexture(struct InputWidget* w, int width, int height) {
-	cc_string line; char lineBuffer[STRING_SIZE + 2];
+	cc_string line; char lineBuffer[STRING_SIZE * 4 + 16];
 	struct DrawTextArgs args;
 	struct Context2D ctx;
 	char lastCol;
@@ -1943,6 +2067,7 @@ static cc_bool ChatInputWidget_IsNameChar(char c) {
 
 static void ChatInputWidget_TabKey(struct InputWidget* w) {
 	cc_string str; char strBuffer[STRING_SIZE];
+	if (String_HasUnicode(&w->text)) return;
 	EntityID matches[TABLIST_MAX_NAMES];
 	cc_string part, name;
 	int beg, end, len;
@@ -2210,7 +2335,7 @@ static int TextGroupWidget_Reduce(struct TextGroupWidget* w, char* chars, int ta
 		line = TextGroupWidget_UNSAFE_Get(w, i);
 		/* TODO properly fix this buffer overflow if multiple lines */
 		/*  of max chat length are added by a plugin and have URLs */
-		line.length = min(line.length, TEXTGROUPWIDGET_LEN);
+		line.length = String_SplitPoint(&line, TEXTGROUPWIDGET_LEN);
 
 		begs[i] = -1; ends[i] = -1;
 		if (!line.length) continue;

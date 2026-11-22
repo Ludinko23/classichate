@@ -46,10 +46,19 @@ extern int Audio_MusicVolume;
 extern const cc_string Sounds_ZipPathMC;
 extern const cc_string Sounds_ZipPathCC;
 
+struct Soundboard;
+void Sounds_PlayAdvanced(cc_uint8 type, struct Soundboard* board, cc_uint32 volume, cc_int32 rate);
+/* Ensure these are declared so Protocol.c and launcher UI can call them */
+void Audio_PlayCustom2D(cc_uint8 channel, cc_uint16 id, cc_uint32 volume, cc_uint8 rate);
+void Audio_PlayCustom3D(cc_uint8 channel, cc_uint16 id, cc_uint32 volume, cc_uint8 rate,
+                        cc_uint16 pos_x, cc_uint16 pos_y, cc_uint16 pos_z);
+
 void Audio_SetMusic(int volume);
 void Audio_SetSounds(int volume);
 void Audio_PlayDigSound(cc_uint8 type);
 void Audio_PlayStepSound(cc_uint8 type);
+/* Plays a sound at normal pitch (rate=100) - used for UI sounds like toasts */
+void Audio_PlayUISound(cc_uint8 type);
 #define AUDIO_MAX_BUFFERS 4
 
 cc_bool AudioBackend_Init(void);
@@ -119,7 +128,36 @@ cc_result SoundContext_PollBusy(struct AudioContext* ctx, cc_bool* isBusy);
 enum SoundType {
 	SOUND_NONE,  SOUND_WOOD,  SOUND_GRAVEL, SOUND_GRASS, 
 	SOUND_STONE, SOUND_METAL, SOUND_GLASS,  SOUND_CLOTH, 
-	SOUND_SAND,  SOUND_SNOW,  SOUND_COUNT
+	SOUND_SAND,  SOUND_SNOW,
+	/* Custom groups */
+	SOUND_PLING,
+	SOUND_CHALLENGE_COMPLETE,
+	SOUND_ANVIL_USE,
+	SOUND_CHEST_OPEN,
+	SOUND_CHEST_CLOSED,
+	SOUND_CLICK,
+	SOUND_DOOR_OPEN,
+	SOUND_DOOR_CLOSE,
+	SOUND_EXPLODE,
+	SOUND_LEVELUP,
+	SOUND_PICKUP,
+	SOUND_POP,
+	SOUND_PORTAL,
+	SOUND_HIT,
+	SOUND_OTHERSIDE,
+	SOUND_OTHERSIDESHORT,
+	SOUND_BESTPARTOTHERSIDE,
+	SOUND_CURSE,
+	SOUND_SMASH,
+	SOUND_TOTEM,
+	SOUND_WATER,
+	SOUND_WIND,
+	SOUND_CRIT,
+	SOUND_SPLASH,
+	SOUND_HEAVY_SPLASH,
+	SOUND_ORB,
+	SOUND_TOAST,
+	SOUND_COUNT
 };
 extern const char* const Sound_Names[SOUND_COUNT];
 

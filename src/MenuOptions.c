@@ -1,3 +1,4 @@
+#include "Language.h"
 #include "Menus.h"
 #include "Widgets.h"
 #include "Game.h"
@@ -134,10 +135,10 @@ static struct Widget* menuOpts_widgets[MENUOPTS_MAX_OPTS + 1];
 
 static void MenuOptionsScreen_Update(struct MenuOptionsScreen* s, struct ButtonWidget* btn) {
 	struct MenuOptionMetaBool* meta = (struct MenuOptionMetaBool*)btn->meta.ptr;
-	cc_string title; char titleBuffer[STRING_SIZE];
+	cc_string title; char titleBuffer[STRING_SIZE * 4];
 	String_InitArray(title, titleBuffer);
 
-	String_AppendConst(&title, btn->optName);
+	Lang_AppendTo(&title, btn->optName);
 	if (meta->GetText) {
 		String_AppendConst(&title, ": ");
 		meta->GetText(btn, &title);
@@ -161,8 +162,11 @@ static void MenuOptionsScreen_LayoutExtHelp(struct MenuOptionsScreen* s) {
 static cc_string MenuOptionsScreen_GetDesc(int i) {
 	const char* desc = MenuOptionsScreen_Instance.extHelpDesc;
 	cc_string descRaw, descLines[5];
+	/* static, because the returned line points into this buffer */
+	static char descBuffer[4096];
 
-	descRaw = String_FromReadonly(desc);
+	String_InitArray(descRaw, descBuffer);
+	Lang_AppendTo(&descRaw, desc);
 	String_UNSAFE_Split(&descRaw, '\n', descLines, Array_Elems(descLines));
 	return descLines[i];
 }
@@ -170,6 +174,7 @@ static cc_string MenuOptionsScreen_GetDesc(int i) {
 static void MenuOptionsScreen_SelectExtHelp(struct MenuOptionsScreen* s, int idx) {
 	const char* desc;
 	cc_string descRaw, descLines[5];
+	char descBuffer[4096];
 
 	MenuOptionsScreen_FreeExtHelp(s);
 	if (s->activeBtn) return;
@@ -179,7 +184,8 @@ static void MenuOptionsScreen_SelectExtHelp(struct MenuOptionsScreen* s, int idx
 	if (!s->widgets[idx]) return;
 	if (s->widgets[idx]->flags & WIDGET_FLAG_DISABLED) return;
 
-	descRaw          = String_FromReadonly(desc);
+	String_InitArray(descRaw, descBuffer);
+	Lang_AppendTo(&descRaw, desc);
 	s->extHelp.lines = String_UNSAFE_Split(&descRaw, '\n', descLines, Array_Elems(descLines));
 	
 	s->extHelpDesc = desc;
@@ -261,7 +267,7 @@ static void MenuOptionsScreen_EndButtons(struct MenuOptionsScreen* s, int half, 
 static void MenuOptionsScreen_BoolGet(struct ButtonWidget* btn, cc_string* v) {
 	struct MenuOptionMetaBool* meta = (struct MenuOptionMetaBool*)btn->meta.ptr;
 	cc_bool value = meta->GetValue();
-	String_AppendConst(v, value ? "Trueu" : "FALSCH");
+	Lang_AppendTo(v, value ? "Trueu" : "FALSCH");
 }
 
 static void MenuOptionsScreen_BoolClick(void* screen, void* widget) {
@@ -289,7 +295,7 @@ void MenuOptionsScreen_AddBool(struct MenuOptionsScreen* s, const char* name,
 static void MenuOptionsScreen_EnumGet(struct ButtonWidget* btn, cc_string* v) {
 	struct MenuOptionMetaEnum* meta = (struct MenuOptionMetaEnum*)btn->meta.ptr;
 	int raw = meta->GetValue();
-	String_AppendConst(v, meta->names[raw]);
+	Lang_AppendTo(v, meta->names[raw]);
 }
 
 static void MenuOptionsScreen_EnumClick(void* screen, void* widget) {
@@ -1232,6 +1238,18 @@ static void    NA_SetClassicInv(cc_bool v) {
 	Options_SetBool(OPT_CLASSIC_INVENTORY, v); 
 }
 
+static cc_bool NA_GetTransparentInv(void) { return Gui.TransparentInventory; }
+static void    NA_SetTransparentInv(cc_bool v) {
+	Gui.TransparentInventory = v;
+	Options_SetBool(OPT_TRANSPARENT_INVENTORY, v);
+}
+
+static cc_bool NA_GetRainbowInv(void) { return Gui.RainbowInventory; }
+static void    NA_SetRainbowInv(cc_bool v) {
+	Gui.RainbowInventory = v;
+	Options_SetBool(OPT_RAINBOW_INVENTORY, v);
+}
+
 static cc_bool NA_GetGui(void) { return Gui.ClassicTexture; }
 static void    NA_SetGui(cc_bool v) { 
 	Gui.ClassicTexture = v;
@@ -1261,7 +1279,11 @@ static void NostalgiaAppearanceScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			NA_GetClassicChat, NA_SetClassicChat, NULL);
 		MenuOptionsScreen_AddBool(s, "Backpack from the 80s",
 			NA_GetClassicInv,  NA_SetClassicInv, NULL);
-			
+		MenuOptionsScreen_AddBool(s, "Transparent inventory",
+			NA_GetTransparentInv, NA_SetTransparentInv, NULL);
+		MenuOptionsScreen_AddBool(s, "Rainbow inventory",
+			NA_GetRainbowInv, NA_SetRainbowInv, NULL);
+		
 		MenuOptionsScreen_AddBool(s, "Notchy stone gui",
 			NA_GetGui,   NA_SetGui, NULL);
 		MenuOptionsScreen_AddBool(s, "Simple players",

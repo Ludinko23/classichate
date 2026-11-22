@@ -1,5 +1,6 @@
 #include "LWeb.h"
 #ifndef CC_DISABLE_LAUNCHER
+#include "CCPSServers.h"
 #include "String_.h"
 #include "Launcher.h"
 #include "Platform.h"
@@ -438,9 +439,14 @@ static void ServerInfo_Parse(struct JsonContext* ctx, const cc_string* val) {
 	}
 }
 
+static void FetchServerTask_Next(struct JsonContext* ctx) {
+	if (ctx->depth != 3) return;
+	curServer = &FetchServerTask.server;
+}
+
 static void FetchServerTask_Handle(cc_uint8* data, cc_uint32 len) {
 	curServer = &FetchServerTask.server;
-	Json_Handle(data, len, ServerInfo_Parse, NULL, NULL);
+	Json_Handle(data, len, ServerInfo_Parse, NULL, FetchServerTask_Next);
 }
 
 void FetchServerTask_Run(const cc_string* hash) {
@@ -514,11 +520,21 @@ static void FetchServersTask_Handle(cc_uint8* data, cc_uint32 len) {
 
 void FetchServersTask_Run(void) {
 	cc_string url; char urlBuffer[URL_MAX_SIZE];
+	const char* customBase;
 	if (FetchServersTask.Base.working) return;
 
 	LWebTask_Reset(&FetchServersTask.Base);
 	String_InitArray(url, urlBuffer);
-	String_Format1(&url, "%s/servers", &servicesServer);
+
+	/* CCPS: only the server list endpoint is overridden.
+	   Login, auth, flags etc. always use the classicube.net default. */
+	customBase = CCPS_GetActiveBaseURL();
+	if (customBase) {
+		cc_string base = String_FromReadonly(customBase);
+		String_Format1(&url, "%s/servers", &base);
+	} else {
+		String_Format1(&url, "%s/servers", &servicesServer);
+	}
 
 	FetchServersTask.Base.Handle = FetchServersTask_Handle;
 	FetchServersTask.Base.reqID  = Http_AsyncGetDataEx(&url, 0, NULL, NULL, &ccCookies);

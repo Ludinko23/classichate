@@ -125,6 +125,11 @@ void Drawer2D_Fill(struct Bitmap* bmp, int x, int y, int width, int height, Bitm
 /* Sets the bitmap used for drawing bitmapped fonts. (i.e. default.png) */
 /* The bitmap must be square and consist of a 16x16 tile layout */
 cc_bool Font_SetBitmapAtlas(struct Bitmap* bmp);
+/* Whether the given file name (no directories) is a glyph page, i.e. unicode-XXXX.png */
+cc_bool Drawer2D_IsUnicodePageName(const cc_string* name);
+/* Loads a glyph page (unicode-XXXX.png) for bitmapped fonts, unless that page is already loaded. */
+/* (the game does this through TextureEvents.FileChanged, the launcher must call this itself) */
+void Drawer2D_LoadUnicodePage(struct Stream* stream, const cc_string* name);
 /* Sets padding for a bitmapped font */
 void Font_SetPadding(struct FontDesc* desc, int amount);
 /* Initialises the given font for drawing bitmapped text using default.png */
